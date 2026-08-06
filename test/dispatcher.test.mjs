@@ -1,10 +1,10 @@
 import assert from 'node:assert/strict';
-import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { test } from 'node:test';
-import { command, dispatch, runCommand } from '../dist/dispatcher.js';
+import { acquire, command, dispatch, runCommand } from '../dist/dispatcher.js';
 
 const cfg = {
   stagingRef: 'staging',
@@ -150,4 +150,14 @@ test('active --status remains observable and stale locks recover safely', () => 
   h.deps.load = () => ({});
   dispatch(h.cfg, h.deps);
   assert.equal(h.state().status, 'done');
+});
+
+test('two stale-lock reclaimers have one atomic winner', () => {
+  const h = harness();
+  mkdirSync(join(h.root, '.llmchat', 'dispatcher.lock'), { recursive: true });
+  writeFileSync(join(h.root, '.llmchat', 'dispatcher.lock', 'owner.json'), '{stale');
+  const first = acquire(h.deps, 1);
+  assert.match(first, /^[0-9a-f-]+$/);
+  assert.throws(() => acquire(h.deps, 1), /already running/);
+  rmSync(join(h.root, '.llmchat', 'dispatcher.lock'), { recursive: true, force: true });
 });

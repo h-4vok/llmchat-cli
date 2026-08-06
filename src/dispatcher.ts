@@ -163,37 +163,44 @@ function status(d: Deps, i: number, s: Status, extra: Partial<State> = {}) {
     `Loop engineering v1: estado ${s}. Skill activa: ${s === 'in_progress' ? skills.work : s === 'reviewing' ? skills.review : s === 'qa_pending' ? skills.qa : s === 'blocked' ? skills.triage : skills.claim}. No se hace merge automático.`,
   );
 }
-function acquire(d: Deps, ttl: number): string {
+export function acquire(d: Deps, ttl: number): string {
   const token = randomUUID();
   mkdirSync(join(d.root, '.llmchat'), { recursive: true });
-  try {
-    mkdirSync(join(d.root, '.llmchat', 'dispatcher.lock'));
-    writeState(
-      { pid: d.pid(), createdAt: d.now(), token } as any,
-      join(d.root, '.llmchat', 'dispatcher.lock', 'owner.json'),
-    );
-  } catch {
-    const owner = join(d.root, '.llmchat', 'dispatcher.lock', 'owner.json');
-    let stale = false;
+  const lock = join(d.root, '.llmchat', 'dispatcher.lock');
+  for (let attempt = 0; attempt < 3; attempt++)
     try {
-      const x: any = JSON.parse(readFileSync(owner, 'utf8'));
-      try {
-        process.kill(x.pid, 0);
-        stale = false;
-      } catch {
-        stale = d.now() - x.createdAt > ttl;
-      }
-    } catch {
-      stale = true;
-    }
-    if (stale) {
-      rmSync(join(d.root, '.llmchat', 'dispatcher.lock'), { recursive: true, force: true });
-      mkdirSync(join(d.root, '.llmchat', 'dispatcher.lock'));
-      writeState({ pid: d.pid(), createdAt: d.now(), token } as any, owner);
+      mkdirSync(lock);
+      writeState({ pid: d.pid(), createdAt: d.now(), token } as any, join(lock, 'owner.json'));
       return token;
-    } else throw new Error('another dispatcher is already running');
-  }
-  return token;
+    } catch {
+      const owner = join(d.root, '.llmchat', 'dispatcher.lock', 'owner.json');
+      let stale = false;
+      try {
+        const x: any = JSON.parse(readFileSync(owner, 'utf8'));
+        try {
+          process.kill(x.pid, 0);
+          stale = false;
+        } catch {
+          stale = d.now() - x.createdAt > ttl;
+        }
+      } catch {
+        stale = true;
+      }
+      if (stale) {
+        const reclaimed = `${lock}.reclaim-${randomUUID()}`;
+        try {
+          renameSync(lock, reclaimed);
+          mkdirSync(lock);
+          writeState({ pid: d.pid(), createdAt: d.now(), token } as any, join(lock, 'owner.json'));
+          rmSync(reclaimed, { recursive: true, force: true });
+          return token;
+        } catch {
+          if (existsSync(reclaimed)) rmSync(reclaimed, { recursive: true, force: true });
+          continue;
+        }
+      } else throw new Error('another dispatcher is already running');
+    }
+  throw new Error('another dispatcher is already running');
 }
 export function dispatch(cfg: Config, d: Deps): void {
   const s = d.load();
