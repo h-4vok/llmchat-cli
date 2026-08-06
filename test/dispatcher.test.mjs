@@ -11,7 +11,7 @@ const cfg = {
   stagingHealthCommand: ['node', '-e', 'console.log(\'{"passed":true}\')'],
   workerCommand: ['node', '-e', 'console.log(\'{"pr":14,"base":"staging"}\')'],
   staffReviewCommand: ['node', '-e', 'console.log(\'{"verdict":"approved"}\')'],
-  qaCommand: ['node', '-e', 'console.log(\'{"verdict":"approved"}\')'],
+  qaCommand: ['node', '-e', 'console.log(\'{"passed":true}\')'],
   smokeCommand: ['node', '-e', 'console.log(\'{"passed":true}\')'],
 };
 function harness(issues = [{ number: 1, title: 'one' }], overrides = {}) {
@@ -43,18 +43,18 @@ function harness(issues = [{ number: 1, title: 'one' }], overrides = {}) {
   };
 }
 
-test('commands validate argv, retries, timeout and no shell', () => {
+test('commands validate argv, retries, timeout and no shell', async () => {
   assert.deepEqual(command(['node', '-e', 'process.exit(0)'], 42, true).args, [
     '-e',
     'process.exit(0)',
     '42',
   ]);
   assert.throws(() => command({ command: 'node; malicious' }, 1), /shell operators/);
-  assert.throws(
-    () => runCommand(command({ command: 'node', args: ['-e', 'process.exit(2)'], retries: 1 }, 0)),
+  await assert.rejects(
+    runCommand(command({ command: 'node', args: ['-e', 'process.exit(2)'], retries: 1 }, 0)),
     /failed after 2 attempt/,
   );
-  assert.throws(
+  await assert.rejects(
     () =>
       runCommand(
         command({ command: 'node', args: ['-e', 'setTimeout(()=>{},1000)'], timeoutMs: 10 }, 0),
@@ -62,12 +62,12 @@ test('commands validate argv, retries, timeout and no shell', () => {
     /failed/,
   );
 });
-test('integration drains issues and gates in order', () => {
+test('integration drains issues and gates in order', async () => {
   const h = harness([
     { number: 1, title: 'a' },
     { number: 2, title: 'b' },
   ]);
-  dispatch(h.cfg, h.deps);
+  await dispatch(h.cfg, h.deps);
   assert.equal(h.state().status, 'done');
   assert.equal(h.runs.length, 9);
   assert.deepEqual(
@@ -75,7 +75,7 @@ test('integration drains issues and gates in order', () => {
     ['node', 'node', 'node', 'node', 'node'],
   );
 });
-test('changes_requested repeats worker/review then proceeds', () => {
+test('changes_requested repeats worker/review then proceeds', async () => {
   let n = 0;
   const h = harness([{ number: 1, title: 'a' }], {
     staffReviewCommand: [
@@ -93,32 +93,32 @@ test('changes_requested repeats worker/review then proceeds', () => {
     }
     return old(s);
   };
-  dispatch(h.cfg, h.deps);
+  await dispatch(h.cfg, h.deps);
   assert.equal(h.state().status, 'done');
   assert.equal(h.state().reviewRound, 2);
   assert.equal(h.runs.filter((run) => run.args.some((arg) => arg.includes('{"pr":14'))).length, 2);
 });
-test('staging red persists blocked and green rerun recovers', () => {
+test('staging red persists blocked and green rerun recovers', async () => {
   const h = harness([{ number: 1, title: 'a' }], {
     stagingHealthCommand: ['node', '-e', 'process.exit(1)'],
   });
-  dispatch(h.cfg, h.deps);
+  await dispatch(h.cfg, h.deps);
   assert.equal(h.state().status, 'blocked');
   assert.equal(h.state().stagingGreen, false);
   h.cfg.stagingHealthCommand = cfg.stagingHealthCommand;
   h.cfg.stagingHealthCommand = ['node', '-e', 'console.log(\'{"passed":true}\')'];
-  dispatch(h.cfg, h.deps);
+  await dispatch(h.cfg, h.deps);
   assert.equal(h.state().status, 'done');
   assert.equal(h.state().stagingGreen, true);
   const runCount = h.runs.length;
-  dispatch(h.cfg, h.deps);
+  await dispatch(h.cfg, h.deps);
   assert.equal(h.runs.length, runCount + 1); // health check only; completed issue remains terminal
 });
-test('bad PR base and failing gates block, and lock contention is exclusive', () => {
+test('bad PR base and failing gates block, and lock contention is exclusive', async () => {
   const h = harness([{ number: 1, title: 'a' }], {
     workerCommand: ['node', '-e', 'console.log(\'{"pr":14,"base":"main"}\')'],
   });
-  dispatch(h.cfg, h.deps);
+  await dispatch(h.cfg, h.deps);
   assert.equal(h.state().status, 'blocked');
   assert.deepEqual(h.state().completedIssues ?? [], []);
   const h2 = harness();
@@ -128,10 +128,10 @@ test('bad PR base and failing gates block, and lock contention is exclusive', ()
     join(h.root, '.llmchat', 'dispatcher.lock', 'owner.json'),
     JSON.stringify({ pid: process.pid, createdAt: Date.now() - 9999999 }),
   );
-  assert.throws(() => dispatch(cfg, h2.deps), /already running/);
+  await assert.rejects(() => dispatch(cfg, h2.deps), /already running/);
 });
 
-test('active --status remains observable and stale locks recover safely', () => {
+test('active --status remains observable and stale locks recover safely', async () => {
   const h = harness();
   mkdirSync(join(h.root, '.llmchat'), { recursive: true });
   writeFileSync(
@@ -148,7 +148,7 @@ test('active --status remains observable and stale locks recover safely', () => 
   mkdirSync(join(h.root, '.llmchat', 'dispatcher.lock'), { recursive: true });
   writeFileSync(join(h.root, '.llmchat', 'dispatcher.lock', 'owner.json'), '{not-json');
   h.deps.load = () => ({});
-  dispatch(h.cfg, h.deps);
+  await dispatch(h.cfg, h.deps);
   assert.equal(h.state().status, 'done');
 });
 
