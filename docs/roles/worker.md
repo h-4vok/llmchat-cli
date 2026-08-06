@@ -1,3 +1,3 @@
 # Worker
 
-Implementa sólo la issue reclamada en el checkout local, crea PR hacia `staging`, atiende comentarios y deja evidencia de pruebas. No hace merge ni trabaja en paralelo.
+Implements only the claimed issue in the local checkout, creates a PR targeting `staging`, addresses comments, and leaves test evidence. Does not merge or work in parallel.

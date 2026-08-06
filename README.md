@@ -1,23 +1,23 @@
 # llmchat-cli
 
-CLI para enviar un prompt a un chat web autenticado mediante un perfil de navegador persistente, recuperar una única respuesta y escribirla en `stdout`; el progreso y los errores van a `stderr`.
+CLI for sending a prompt to an authenticated web chat through a persistent browser profile, retrieving one response, and writing it to `stdout`; progress and errors go to `stderr`.
 
 ## MVP
 
-- Proveedor funcional: Gemini, mediante Chromium/Playwright y el perfil persistente `~/.llmchat-cli/profiles/gemini`.
-- Un prompt por invocación; no se resuelven todavía login guiado, CAPTCHA, reintentos, configuración avanzada ni formatos alternativos.
-- ChatGPT y Perplexity quedan para fases posteriores.
+- Supported provider: Gemini, using Chromium/Playwright and the persistent profile `~/.llmchat-cli/profiles/gemini`.
+- One prompt per invocation; guided login, CAPTCHA handling, retries, advanced configuration, and alternate formats are not supported yet.
+- ChatGPT and Perplexity are planned for later phases.
 
-## Uso
+## Usage
 
 ```text
-llmchat --provider gemini "Explica qué es una API en una frase"
+llmchat --provider gemini "Explain what an API is in one sentence"
 llmchat --provider gemini --login
 ```
 
-Requiere Node.js 20+ y Chromium instalado para Playwright. El login se realiza manualmente en la ventana del navegador y la sesión se conserva en el perfil local.
+Requires Node.js 20+ and Chromium installed for Playwright. Login is completed manually in the browser window, and the session is retained in the local profile.
 
-## Desarrollo
+## Development
 
 ```text
 npm install
@@ -25,16 +25,16 @@ npm run build
 npm test
 ```
 
-Este repositorio contiene sólo el esqueleto y la primera ruta Gemini end-to-end. Las decisiones pendientes están registradas como issues de GitHub.
+This repository contains the skeleton and the first end-to-end Gemini route. Open decisions are tracked as GitHub issues.
 
 ## Loop engineering v1
 
-La especificación canónica es la [issue #13](https://github.com/h-4vok/llmchat-cli/issues/13). El dispatcher manual se ejecuta con `npm run loop -- --list`, `npm run loop -- --status` o `npm run loop`. Copia `loop.config.json.example` a `loop.config.json` para configurar comandos de worker/revisión/QA. El estado local vive en `.llmchat/state.json` y nunca se versiona.
+The canonical specification is [issue #13](https://github.com/h-4vok/llmchat-cli/issues/13). Run the manual dispatcher with `npm run loop -- --list`, `npm run loop -- --status`, or `npm run loop`. Copy `loop.config.json.example` to `loop.config.json` to configure worker/review/QA commands. Local state is stored in `.llmchat/state.json` and is never committed.
 
-El flujo es deliberadamente secuencial: etiqueta `Automation Ready` → reclamo visible → worker → PR a `staging` → Staff/adversarial → QA/SDET → smoke tests → listo para merge humano. No hay merge automático a `main`, worktrees ni paralelismo. Si staging está rojo, el dispatcher se pausa y el rol Triage debe reparar y marcar `stagingGreen` en el estado antes de reanudar.
+The flow is deliberately sequential: `Automation Ready` label → visible claim → worker → PR to `staging` → Staff/adversarial review → QA/SDET → smoke tests → ready for human merge. There is no automatic merge to `main`, no worktrees, and no parallelism. If staging is red, the dispatcher pauses; the Triage role must repair it and set `stagingGreen` in state before resuming.
 
-Roles y procedimientos operativos: [`docs/loop-engineering-v1.md`](docs/loop-engineering-v1.md), [`docs/roles/`](docs/roles/).
+Roles and operating procedures: [`docs/loop-engineering-v1.md`](docs/loop-engineering-v1.md), [`docs/roles/`](docs/roles/).
 
-## Skills reutilizables
+## Reusable skills
 
-Codex descubre las skills del loop en [`.codex/skills/`](.codex/skills/). Invócalas manualmente por nombre (`product-lead`, `dispatcher`, `worker`, `staff-reviewer`, `qa-sdet`, `triage-staging`) o deja que el dispatcher documente la skill activa en cada transición. Cada skill define entrada, salida, estado y límites de merge; los documentos de `docs/roles/` conservan únicamente el contexto operativo general.
+Codex discovers the loop skills in [`.codex/skills/`](.codex/skills/). Invoke them manually by name (`product-lead`, `dispatcher`, `worker`, `staff-reviewer`, `qa-sdet`, `triage-staging`), or let the dispatcher record the active skill at each transition. Each skill defines its entry conditions, outputs, state, and merge boundaries; the documents in `docs/roles/` retain only general operating context.

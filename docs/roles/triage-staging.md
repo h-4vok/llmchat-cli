@@ -1,3 +1,3 @@
-# Triage de staging
+# Staging triage
 
-Ante staging rojo, pausa el dispatcher, identifica la causa raíz, prioriza una reparación mínima y verifica `stagingHealthCommand`. Sólo entonces marca staging verde y permite reanudar.
+When staging is red, pauses the dispatcher, identifies the root cause, prioritizes a minimal repair, and verifies `stagingHealthCommand`. Only then marks staging green and allows the loop to resume.

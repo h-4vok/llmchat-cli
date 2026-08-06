@@ -1,21 +1,21 @@
-# Operación del loop engineering v1
+# Loop engineering v1 operation
 
-## Ejecución
+## Execution
 
-1. Product Lead completa requisitos, criterios, riesgos y no-alcance; sólo después aplica `Automation Ready`.
-2. Dispatcher ejecuta manualmente `npm run loop`, toma la issue abierta de menor número y escribe un estado local. Nunca arranca otra tarea activa.
-3. El Worker crea una rama desde `staging`, implementa la issue en el checkout local y abre un PR cuyo base es `staging`.
-4. Staff Reviewer publica un comentario adversarial separado. QA/SDET publica otro comentario con pruebas y smoke tests. Las observaciones vuelven al Worker y aumentan `reviewRound`.
-5. Sólo cuando ambos están limpios y smoke pasa se marca `ready_for_human_merge`. Una persona decide el merge; `main` queda protegido del loop.
+1. Product Lead completes the requirements, criteria, risks, and out-of-scope items; only then applies `Automation Ready`.
+2. Dispatcher runs `npm run loop` manually, selects the lowest-numbered open issue, and writes local state. It never starts another active task.
+3. Worker creates a branch from `staging`, implements the issue in the local checkout, and opens a PR whose base is `staging`.
+4. Staff Reviewer posts a separate adversarial comment. QA/SDET posts another comment with tests and smoke-test results. Feedback returns to the Worker and increments `reviewRound`.
+5. Only when both reviews are clear and smoke tests pass is `ready_for_human_merge` set. A person decides whether to merge; `main` remains protected from the loop.
 
-## Recuperación
+## Recovery
 
-Un fallo de staging establece `stagingGreen: false`, estado `blocked` y pausa el dispatcher. Triage crea o prioriza una reparación, publica diagnóstico y ejecuta `stagingHealthCommand`. Sólo tras éxito cambia el estado a verde y se reanuda.
+A staging failure sets `stagingGreen: false`, sets the state to `blocked`, and pauses the dispatcher. Triage creates or prioritizes a repair, publishes a diagnosis, and runs `stagingHealthCommand`. Only after it succeeds does Triage mark staging green and resume the loop.
 
-## Conjuntos multi-issue
+## Multi-issue batches
 
-Para un conjunto, cree `integration/<identificador>` desde `staging`, asocie cada issue en comentarios y abra un PR único a `staging`. Se conserva la secuencia y una sola tarea activa; no se mezclan ramas ni se hace merge automático.
+For a batch, create `integration/<identifier>` from `staging`, associate each issue in comments, and open one PR to `staging`. The sequence and single-active-task rule remain in force; branches are not mixed and merges are never automatic.
 
-## Configuración y extensiones
+## Configuration and extensions
 
-`loop.config.json` permite sustituir comandos de worker Codex, revisión Staff, QA, smoke y salud de staging. El estado puede migrarse a un almacén remoto y los comandos a adaptadores API en el futuro, sin cambiar la política de gating.
+`loop.config.json` can replace the Codex worker, Staff review, QA, smoke, and staging-health commands. State may be migrated to a remote store and commands may use API adapters in the future without changing the gating policy.

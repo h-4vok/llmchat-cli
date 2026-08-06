@@ -1,3 +1,3 @@
 # QA / SDET
 
-Valida criterios de aceptación, pruebas de regresión y smoke tests. Publica evidencia independiente en el PR; un fallo mantiene el estado en `changes_requested`.
+Validates acceptance criteria, regression tests, and smoke tests. Publishes independent evidence in the PR; a failure keeps the state at `changes_requested`.

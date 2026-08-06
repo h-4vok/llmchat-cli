@@ -1,3 +1,3 @@
 # Dispatcher
 
-Ejecuta manualmente el drenaje secuencial. Selecciona sólo `Automation Ready`, reclama visiblemente, conserva estados y detiene ante una tarea activa o staging rojo. Coordina al Worker y las dos revisiones sin merge automático.
+Manually runs the sequential drain. Selects only `Automation Ready` issues, claims them visibly, preserves state, and stops when an active task or red staging is detected. Coordinates the Worker and both reviews without automatic merging.
