@@ -1,21 +1,23 @@
 # llmchat-cli
 
-CLI for sending a prompt to an authenticated web chat through a persistent browser profile, retrieving one response, and writing it to `stdout`; progress and errors go to `stderr`.
+CLI foundation for provider-backed chat. The MVP uses a deterministic simulation so it can be used and tested without network access; successful output goes to `stdout` and errors go to `stderr`.
 
 ## MVP
 
-- Supported provider: Gemini, using Chromium/Playwright and the persistent profile `~/.llmchat-cli/profiles/gemini`.
-- One prompt per invocation; guided login, CAPTCHA handling, retries, advanced configuration, and alternate formats are not supported yet.
-- ChatGPT and Perplexity are planned for later phases.
+- Supported provider: `gemini`.
+- The selected default is stored in the user-local configuration directory (`$XDG_CONFIG_HOME/llmchat/config.json`, or the platform equivalent).
+- Real provider requests, authentication, streaming, and additional providers are planned for later phases.
 
 ## Usage
 
 ```text
-llmchat --provider gemini "Explain what an API is in one sentence"
-llmchat --provider gemini --login
+llmchat config set-default-provider gemini
+llmchat chat "Explain what an API is in one sentence"
+llmchat chat "Explain what an API is" --provider gemini
+llmchat config clear-default-provider
 ```
 
-Requires Node.js 20+ and Chromium installed for Playwright. Login is completed manually in the browser window, and the session is retained in the local profile.
+Use `llmchat --help` and `llmchat config --help` for command usage and supported values. A provider can be passed before or after the prompt; the canonical form is `llmchat chat "<prompt>" --provider <provider>`.
 
 ## Development
 

@@ -99,6 +99,8 @@ function main(): void {
   const parsed = parseChat(args);
   if (parsed.help) return printRootHelp();
   if (!parsed.prompt) throw new Error('A prompt is required.');
+  // Validate an invocation override before touching persisted configuration.
+  if (parsed.provider) validateProvider(parsed.provider);
   const provider = parsed.provider ?? readConfig().defaultProvider;
   if (!provider)
     throw new Error(

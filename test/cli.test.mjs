@@ -15,11 +15,20 @@ function run(configHome, ...args) {
 
 test('chat supports provider precedence and deterministic output', () => {
   const configHome = mkdtempSync(join(tmpdir(), 'llmchat-cli-'));
-  assert.match(run(configHome, 'chat', 'hello').stderr, /No provider selected/);
-  assert.equal(run(configHome, 'chat', '--provider', 'gemini', 'hello').status, 0);
-  assert.match(run(configHome, 'chat', 'hello', '--provider', 'gemini').stdout, /Gemini.*hello/i);
+  const missing = run(configHome, 'chat', 'hello');
+  assert.notEqual(missing.status, 0);
+  assert.match(missing.stderr, /No provider selected/);
+  assert.equal(missing.stdout, '');
+  const beforePrompt = run(configHome, 'chat', '--provider', 'gemini', 'hello');
+  assert.equal(beforePrompt.status, 0);
+  assert.match(beforePrompt.stdout, /gemini.*hello/i);
+  const afterPrompt = run(configHome, 'chat', 'hello', '--provider', 'gemini');
+  assert.equal(afterPrompt.status, 0);
+  assert.match(afterPrompt.stdout, /gemini.*hello/i);
   assert.equal(run(configHome, 'config', 'set-default-provider', 'gemini').status, 0);
-  assert.match(run(configHome, 'chat', 'hello').stdout, /gemini.*hello/i);
+  const saved = run(configHome, 'chat', 'hello');
+  assert.match(saved.stdout, /gemini.*hello/i);
+  assert.equal(run(configHome, 'chat', 'hello', '--provider', 'openai').status !== 0, true);
   assert.match(readFileSync(join(configHome, 'llmchat', 'config.json'), 'utf8'), /gemini/);
 });
 
@@ -30,7 +39,11 @@ test('configuration validation, clearing, and help are predictable', () => {
   assert.match(invalid.stderr, /Unsupported provider/);
   assert.equal(run(configHome, 'config', 'clear-default-provider').status, 0);
   assert.match(run(configHome, '--help').stdout, /Usage:.*chat/s);
-  assert.match(run(configHome, 'config', '--help').stdout, /set-default-provider/);
+  const configHelp = run(configHome, 'config', '--help');
+  assert.equal(configHelp.status, 0);
+  assert.match(configHelp.stdout, /set-default-provider/);
+  assert.match(configHelp.stdout, /gemini/);
+  assert.equal(run(configHome, 'chat', '--help').status, 0);
   assert.equal(run(configHome, 'config', 'set-default-provider', 'gemini').status, 0);
   assert.equal(run(configHome, 'config', 'clear-default-provider').status, 0);
   assert.equal(run(configHome, 'config', 'clear-default-provider').status, 0);
