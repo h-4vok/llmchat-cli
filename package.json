@@ -1,0 +1,10 @@
+{
+  "name": "llmchat-cli",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "bin": { "llmchat": "dist/cli.js" },
+  "scripts": { "build": "tsc", "test": "node --test", "start": "node dist/cli.js" },
+  "dependencies": { "playwright": "^1.55.0" },
+  "devDependencies": { "@types/node": "^22.0.0", "typescript": "^5.7.0" }
+}
