@@ -161,3 +161,21 @@ test('two stale-lock reclaimers have one atomic winner', () => {
   assert.throws(() => acquire(h.deps, 1), /already running/);
   rmSync(join(h.root, '.llmchat', 'dispatcher.lock'), { recursive: true, force: true });
 });
+
+test('reclaim marker closes the forced reclaim window', () => {
+  const h = harness();
+  mkdirSync(join(h.root, '.llmchat', 'dispatcher.lock'), { recursive: true });
+  writeFileSync(join(h.root, '.llmchat', 'dispatcher.lock', 'owner.json'), '{stale');
+  let secondError;
+  h.deps.onReclaim = () => {
+    try {
+      acquire(h.deps, 1);
+    } catch (error) {
+      secondError = error;
+    }
+  };
+  acquire(h.deps, 1);
+  assert.match(String(secondError), /already running/);
+  assert.equal(existsSync(join(h.root, '.llmchat', 'dispatcher.lock')), true);
+  rmSync(join(h.root, '.llmchat', 'dispatcher.lock'), { recursive: true, force: true });
+});

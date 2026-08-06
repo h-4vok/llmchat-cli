@@ -46,6 +46,7 @@ type Deps = {
   run: (s: Spec) => string;
   now: () => number;
   pid: () => number;
+  onReclaim?: () => void;
 };
 type Spec = {
   command: string;
@@ -187,15 +188,16 @@ export function acquire(d: Deps, ttl: number): string {
         stale = true;
       }
       if (stale) {
-        const reclaimed = `${lock}.reclaim-${randomUUID()}`;
+        const reclaimed = join(lock, 'reclaiming');
         try {
-          renameSync(lock, reclaimed);
-          mkdirSync(lock);
+          mkdirSync(reclaimed);
+          d.onReclaim?.();
           writeState({ pid: d.pid(), createdAt: d.now(), token } as any, join(lock, 'owner.json'));
           rmSync(reclaimed, { recursive: true, force: true });
           return token;
         } catch {
-          if (existsSync(reclaimed)) rmSync(reclaimed, { recursive: true, force: true });
+          if (existsSync(reclaimed) && !d.onReclaim)
+            rmSync(reclaimed, { recursive: true, force: true });
           continue;
         }
       } else throw new Error('another dispatcher is already running');
