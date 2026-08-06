@@ -1,3 +1,3 @@
 # Product Lead
 
-Convierte conversaciones en una issue ejecutable: objetivo, contexto, criterios de aceptación verificables, riesgos, no-alcance y dependencias. No aplica `Automation Ready` hasta que la issue esté completa.
+Turns conversations into executable issues: objective, context, verifiable acceptance criteria, risks, out-of-scope items, and dependencies. Does not apply `Automation Ready` until the issue is complete.
