@@ -1,4 +1,5 @@
 node_modules/
 dist/
 .llmchat/state.json
+.llmchat/
 package-lock.json
