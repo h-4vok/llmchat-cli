@@ -8,7 +8,7 @@
   },
   "scripts": {
     "build": "tsc",
-    "test": "node --test",
+    "test": "npm run build && node --test",
     "start": "node dist/cli.js",
     "loop": "node dist/dispatcher.js",
     "format": "prettier --write .",

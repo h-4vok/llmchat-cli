@@ -1,9 +1,10 @@
 {
   "baseBranch": "staging",
-  "workerCommand": "",
-  "staffReviewCommand": "",
-  "qaCommand": "npm test",
-  "smokeCommand": "npm run build",
-  "stagingHealthCommand": "npm test",
+  "workerCommand": ["codex", "exec"],
+  "staffReviewCommand": ["codex", "exec"],
+  "qaCommand": ["npm", "test"],
+  "smokeCommand": ["npm", "run", "build"],
+  "stagingHealthCommand": ["npm", "test"],
+  "retries": 1,
   "integrationBranchPrefix": "integration/"
 }
