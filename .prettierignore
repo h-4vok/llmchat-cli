@@ -1,5 +1,4 @@
 node_modules/
 dist/
-.DS_Store
 .llmchat/state.json
-loop.config.json
+package-lock.json

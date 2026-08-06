@@ -1,0 +1,4 @@
+interface:
+  display_name: 'dispatcher'
+  short_description: 'Reusable dispatcher workflow'
+  default_prompt: 'Use the dispatcher workflow for this repository.'

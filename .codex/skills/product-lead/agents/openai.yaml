@@ -1,0 +1,4 @@
+interface:
+  display_name: 'product-lead'
+  short_description: 'Reusable product-lead workflow'
+  default_prompt: 'Use the product-lead workflow for this repository.'
