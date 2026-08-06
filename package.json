@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "bin": { "llmchat": "dist/cli.js" },
-  "scripts": { "build": "tsc", "test": "node --test", "start": "node dist/cli.js" },
+  "scripts": { "build": "tsc", "test": "node --test", "start": "node dist/cli.js", "loop": "node dist/dispatcher.js" },
   "dependencies": { "playwright": "^1.55.0" },
   "devDependencies": { "@types/node": "^22.0.0", "typescript": "^5.7.0" }
 }

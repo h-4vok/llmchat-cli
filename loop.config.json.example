@@ -1,0 +1,9 @@
+{
+  "baseBranch": "staging",
+  "workerCommand": "",
+  "staffReviewCommand": "",
+  "qaCommand": "npm test",
+  "smokeCommand": "npm run build",
+  "stagingHealthCommand": "npm test",
+  "integrationBranchPrefix": "integration/"
+}

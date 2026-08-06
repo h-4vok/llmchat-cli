@@ -26,3 +26,11 @@ npm test
 ```
 
 Este repositorio contiene sólo el esqueleto y la primera ruta Gemini end-to-end. Las decisiones pendientes están registradas como issues de GitHub.
+
+## Loop engineering v1
+
+La especificación canónica es la [issue #13](https://github.com/h-4vok/llmchat-cli/issues/13). El dispatcher manual se ejecuta con `npm run loop -- --list`, `npm run loop -- --status` o `npm run loop`. Copia `loop.config.json.example` a `loop.config.json` para configurar comandos de worker/revisión/QA. El estado local vive en `.llmchat/state.json` y nunca se versiona.
+
+El flujo es deliberadamente secuencial: etiqueta `Automation Ready` → reclamo visible → worker → PR a `staging` → Staff/adversarial → QA/SDET → smoke tests → listo para merge humano. No hay merge automático a `main`, worktrees ni paralelismo. Si staging está rojo, el dispatcher se pausa y el rol Triage debe reparar y marcar `stagingGreen` en el estado antes de reanudar.
+
+Roles y procedimientos operativos: [`docs/loop-engineering-v1.md`](docs/loop-engineering-v1.md), [`docs/roles/`](docs/roles/).
