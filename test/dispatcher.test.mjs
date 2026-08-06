@@ -68,7 +68,7 @@ test('integration drains issues and gates in order', () => {
     { number: 2, title: 'b' },
   ]);
   dispatch(h.cfg, h.deps);
-  assert.equal(h.state().status, 'ready_for_human_merge');
+  assert.equal(h.state().status, 'done');
   assert.equal(h.runs.length, 9);
   assert.deepEqual(
     h.runs.slice(0, 5).map((x) => x.command),
@@ -94,8 +94,9 @@ test('changes_requested repeats worker/review then proceeds', () => {
     return old(s);
   };
   dispatch(h.cfg, h.deps);
-  assert.equal(h.state().status, 'ready_for_human_merge');
+  assert.equal(h.state().status, 'done');
   assert.equal(h.state().reviewRound, 2);
+  assert.equal(h.runs.filter((run) => run.args.some((arg) => arg.includes('{"pr":14'))).length, 2);
 });
 test('staging red persists blocked and green rerun recovers', () => {
   const h = harness([{ number: 1, title: 'a' }], {
@@ -104,9 +105,14 @@ test('staging red persists blocked and green rerun recovers', () => {
   dispatch(h.cfg, h.deps);
   assert.equal(h.state().status, 'blocked');
   assert.equal(h.state().stagingGreen, false);
-  const h2 = harness([{ number: 1, title: 'a' }]);
-  dispatch(h2.cfg, h2.deps);
-  assert.equal(h2.state().status, 'ready_for_human_merge');
+  h.cfg.stagingHealthCommand = cfg.stagingHealthCommand;
+  h.cfg.stagingHealthCommand = ['node', '-e', 'console.log(\'{"passed":true}\')'];
+  dispatch(h.cfg, h.deps);
+  assert.equal(h.state().status, 'done');
+  assert.equal(h.state().stagingGreen, true);
+  const runCount = h.runs.length;
+  dispatch(h.cfg, h.deps);
+  assert.equal(h.runs.length, runCount + 1); // health check only; completed issue remains terminal
 });
 test('bad PR base and failing gates block, and lock contention is exclusive', () => {
   const h = harness([{ number: 1, title: 'a' }], {
@@ -114,12 +120,13 @@ test('bad PR base and failing gates block, and lock contention is exclusive', ()
   });
   dispatch(h.cfg, h.deps);
   assert.equal(h.state().status, 'blocked');
+  assert.deepEqual(h.state().completedIssues ?? [], []);
   const h2 = harness();
   h2.deps.root = h.root;
   mkdirSync(join(h.root, '.llmchat', 'dispatcher.lock'), { recursive: true });
   writeFileSync(
     join(h.root, '.llmchat', 'dispatcher.lock', 'owner.json'),
-    JSON.stringify({ pid: process.pid, createdAt: Date.now() }),
+    JSON.stringify({ pid: process.pid, createdAt: Date.now() - 9999999 }),
   );
   assert.throws(() => dispatch(cfg, h2.deps), /already running/);
 });
@@ -139,11 +146,8 @@ test('active --status remains observable and stale locks recover safely', () => 
   assert.equal(status.status, 0);
   assert.match(status.stdout, /in_progress/);
   mkdirSync(join(h.root, '.llmchat', 'dispatcher.lock'), { recursive: true });
-  writeFileSync(
-    join(h.root, '.llmchat', 'dispatcher.lock', 'owner.json'),
-    JSON.stringify({ pid: 999999, createdAt: Date.now() }),
-  );
+  writeFileSync(join(h.root, '.llmchat', 'dispatcher.lock', 'owner.json'), '{not-json');
   h.deps.load = () => ({});
   dispatch(h.cfg, h.deps);
-  assert.equal(h.state().status, 'ready_for_human_merge');
+  assert.equal(h.state().status, 'done');
 });

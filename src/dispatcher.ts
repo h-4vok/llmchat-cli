@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { execFileSync } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
@@ -21,6 +22,8 @@ export type State = {
   attempt?: number;
   stagingGreen?: boolean;
   lastError?: string;
+  completedIssues?: number[];
+  drainStatus?: 'running' | 'done';
 };
 type Command =
   string[] | { command: string; args?: string[]; timeoutMs?: number; retries?: number };
@@ -160,12 +163,13 @@ function status(d: Deps, i: number, s: Status, extra: Partial<State> = {}) {
     `Loop engineering v1: estado ${s}. Skill activa: ${s === 'in_progress' ? skills.work : s === 'reviewing' ? skills.review : s === 'qa_pending' ? skills.qa : s === 'blocked' ? skills.triage : skills.claim}. No se hace merge automático.`,
   );
 }
-function acquire(d: Deps, ttl: number) {
+function acquire(d: Deps, ttl: number): string {
+  const token = randomUUID();
   mkdirSync(join(d.root, '.llmchat'), { recursive: true });
   try {
     mkdirSync(join(d.root, '.llmchat', 'dispatcher.lock'));
     writeState(
-      { pid: d.pid(), createdAt: d.now() } as any,
+      { pid: d.pid(), createdAt: d.now(), token } as any,
       join(d.root, '.llmchat', 'dispatcher.lock', 'owner.json'),
     );
   } catch {
@@ -173,13 +177,11 @@ function acquire(d: Deps, ttl: number) {
     let stale = false;
     try {
       const x: any = JSON.parse(readFileSync(owner, 'utf8'));
-      stale = d.now() - x.createdAt > ttl;
-      if (!stale) {
-        try {
-          process.kill(x.pid, 0);
-        } catch {
-          stale = true;
-        }
+      try {
+        process.kill(x.pid, 0);
+        stale = false;
+      } catch {
+        stale = d.now() - x.createdAt > ttl;
       }
     } catch {
       stale = true;
@@ -187,15 +189,17 @@ function acquire(d: Deps, ttl: number) {
     if (stale) {
       rmSync(join(d.root, '.llmchat', 'dispatcher.lock'), { recursive: true, force: true });
       mkdirSync(join(d.root, '.llmchat', 'dispatcher.lock'));
-      writeState({ pid: d.pid(), createdAt: d.now() } as any, owner);
+      writeState({ pid: d.pid(), createdAt: d.now(), token } as any, owner);
+      return token;
     } else throw new Error('another dispatcher is already running');
   }
+  return token;
 }
 export function dispatch(cfg: Config, d: Deps): void {
   const s = d.load();
   if (s.status && !['done', 'ready_for_human_merge', 'blocked'].includes(s.status))
     throw new Error(`active run exists for issue #${s.issue}`);
-  acquire(d, cfg.lockTtlMs ?? 900000);
+  const lockToken = acquire(d, cfg.lockTtlMs ?? 900000);
   try {
     if (
       !cfg.stagingHealthCommand ||
@@ -227,21 +231,25 @@ export function dispatch(cfg: Config, d: Deps): void {
     }
     if (s.status === 'blocked')
       d.save({ ...d.load(), status: undefined, issue: undefined, lastError: undefined });
-    const processed = new Set<number>();
+    const processed = new Set<number>(d.load().completedIssues ?? []);
+    d.save({ ...d.load(), drainStatus: 'running' });
     while (true) {
       const issue = d.eligible().find((x) => !processed.has(x.number));
-      if (!issue) return;
+      if (!issue) {
+        d.save({ ...d.load(), status: 'done', drainStatus: 'done' });
+        return;
+      }
       processed.add(issue.number);
       status(d, issue.number, 'claimed');
       d.comment(issue.number, 'Dispatcher reclama esta issue de forma exclusiva.');
       try {
-        status(d, issue.number, 'in_progress');
-        const wr = result(d.run(must(cfg.workerCommand, issue.number, true)), 'worker');
-        if (wr.base !== 'staging' || !wr.pr)
-          throw new Error('worker must return a PR based on staging');
-        d.save({ ...d.load(), pr: wr.pr });
         let round = 1;
         while (true) {
+          status(d, issue.number, 'in_progress', { reviewRound: round });
+          const wr = result(d.run(must(cfg.workerCommand, issue.number, true)), 'worker');
+          if (wr.base !== 'staging' || !wr.pr)
+            throw new Error('worker must return a PR based on staging');
+          d.save({ ...d.load(), pr: wr.pr });
           d.save({ ...d.load(), reviewRound: round });
           status(d, issue.number, 'reviewing', { reviewRound: round });
           const sr = result(d.run(must(cfg.staffReviewCommand, issue.number)), 'Staff');
@@ -260,6 +268,10 @@ export function dispatch(cfg: Config, d: Deps): void {
           break;
         }
         status(d, issue.number, 'ready_for_human_merge');
+        d.save({
+          ...d.load(),
+          completedIssues: [...new Set([...(d.load().completedIssues ?? []), issue.number])],
+        });
         d.comment(
           issue.number,
           '[Worker] loop gates passed; ready_for_human_merge, no merge performed.',
@@ -272,7 +284,13 @@ export function dispatch(cfg: Config, d: Deps): void {
       }
     }
   } finally {
-    rmSync(join(d.root, '.llmchat', 'dispatcher.lock'), { recursive: true, force: true });
+    const owner = join(d.root, '.llmchat', 'dispatcher.lock', 'owner.json');
+    try {
+      if (JSON.parse(readFileSync(owner, 'utf8')).token === lockToken)
+        rmSync(join(d.root, '.llmchat', 'dispatcher.lock'), { recursive: true, force: true });
+    } catch {
+      /* lock already recovered */
+    }
   }
 }
 function main() {
