@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -175,7 +175,24 @@ test('reclaim marker closes the forced reclaim window', () => {
     }
   };
   acquire(h.deps, 1);
-  assert.match(String(secondError), /already running/);
+  assert.match(String(secondError), /reclaiming the lock/);
   assert.equal(existsSync(join(h.root, '.llmchat', 'dispatcher.lock')), true);
   rmSync(join(h.root, '.llmchat', 'dispatcher.lock'), { recursive: true, force: true });
+});
+
+test('dead reclaim marker recovers after its TTL', () => {
+  const h = harness();
+  const lock = join(h.root, '.llmchat', 'dispatcher.lock');
+  const marker = join(lock, 'reclaiming');
+  mkdirSync(marker, { recursive: true });
+  writeFileSync(join(lock, 'owner.json'), '{stale');
+  writeFileSync(
+    join(marker, 'owner.json'),
+    JSON.stringify({ pid: 'dead', createdAt: Date.now() - 100 }),
+  );
+  utimesSync(marker, new Date(Date.now() - 100), new Date(Date.now() - 100));
+  const token = acquire(h.deps, 1);
+  assert.match(token, /^[0-9a-f-]+$/);
+  assert.equal(existsSync(join(lock, 'reclaiming')), false);
+  rmSync(lock, { recursive: true, force: true });
 });

@@ -1,7 +1,15 @@
 #!/usr/bin/env node
 import { execFileSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs';
 import { join } from 'node:path';
 
 export type Status =
@@ -189,8 +197,27 @@ export function acquire(d: Deps, ttl: number): string {
       }
       if (stale) {
         const reclaimed = join(lock, 'reclaiming');
+        if (existsSync(reclaimed)) {
+          let markerStale = false;
+          try {
+            const marker: any = JSON.parse(readFileSync(join(reclaimed, 'owner.json'), 'utf8'));
+            try {
+              process.kill(marker.pid, 0);
+            } catch {
+              markerStale = d.now() - marker.createdAt > ttl;
+            }
+          } catch {
+            markerStale = d.now() - statSync(reclaimed).mtimeMs > ttl;
+          }
+          if (!markerStale) throw new Error('another dispatcher is reclaiming the lock');
+          rmSync(reclaimed, { recursive: true, force: true });
+        }
         try {
           mkdirSync(reclaimed);
+          writeState(
+            { pid: d.pid(), createdAt: d.now(), token } as any,
+            join(reclaimed, 'owner.json'),
+          );
           d.onReclaim?.();
           writeState({ pid: d.pid(), createdAt: d.now(), token } as any, join(lock, 'owner.json'));
           rmSync(reclaimed, { recursive: true, force: true });
