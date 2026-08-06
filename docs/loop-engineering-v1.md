@@ -8,6 +8,10 @@
 4. Staff Reviewer posts a separate adversarial comment. QA/SDET posts another comment with tests and smoke-test results. Feedback returns to the Worker and increments `reviewRound`.
 5. Only when both reviews are clear and smoke tests pass is `ready_for_human_merge` set. A person decides whether to merge; `main` remains protected from the loop.
 
+## PR comment protocol
+
+Every review round has one comment per role. Markers are mandatory and case-sensitive: `[Staff Review]`, `[QA/SDET Review]`, and `[Worker]`. Staff findings use `S1`, `S2`, etc.; QA checks/findings use `Q1`, `Q2`, etc. Review comments start with `round=<N> verdict=...`; Worker replies preserve the ID and use `status=fixed|answered|not_fixed`. Include `file:line` for source/test references and exact commands/results in QA evidence. Worker ignores unmarked comments and all `[Worker]` comments for review routing, replies in the original thread, and resolves only addressed findings.
+
 ## Recovery
 
 A staging failure sets `stagingGreen: false`, sets the state to `blocked`, and pauses the dispatcher. Triage creates or prioritizes a repair, publishes a diagnosis, and runs `stagingHealthCommand`. Only after it succeeds does Triage mark staging green and resume the loop.
