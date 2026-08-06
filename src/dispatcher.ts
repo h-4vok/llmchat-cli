@@ -24,6 +24,13 @@ const root = process.cwd();
 const stateDir = join(root, '.llmchat');
 const stateFile = join(stateDir, 'state.json');
 const configFile = join(root, 'loop.config.json');
+const skills = {
+  claim: 'dispatcher',
+  work: 'worker',
+  review: 'staff-reviewer',
+  qa: 'qa-sdet',
+  triage: 'triage-staging',
+} as const;
 
 function run(args: string[]): string {
   return execFileSync('gh', args, {
@@ -42,20 +49,23 @@ function save(state: State): void {
 function comment(issue: number, body: string): void {
   run(['issue', 'comment', String(issue), '--body', body]);
 }
+function skillFor(status: Status): string {
+  if (status === 'in_progress') return skills.work;
+  if (status === 'reviewing' || status === 'changes_requested') return skills.review;
+  if (status === 'qa_pending') return skills.qa;
+  if (status === 'blocked') return skills.triage;
+  return skills.claim;
+}
 function setStatus(issue: number, status: Status, extra: Partial<State> = {}): void {
-  const state = { ...load(), issue, status, ...extra };
-  save(state);
+  save({ ...load(), issue, status, ...extra });
   comment(
     issue,
-    'Loop engineering v1: estado ' +
-      status +
-      '.\\n\\nDispatcher local; no se hace merge automático.',
+    `Loop engineering v1: estado ${status}.\n\nSkill activa: ${skillFor(status)}. No se hace merge automático.`,
   );
 }
 function config(): Record<string, any> {
   return existsSync(configFile) ? JSON.parse(readFileSync(configFile, 'utf8')) : {};
 }
-
 function eligible(): Array<{ number: number; title: string }> {
   return JSON.parse(
     run([
@@ -89,7 +99,7 @@ function main(): void {
     return;
   }
   if (state.stagingGreen === false)
-    throw new Error('staging is red; dispatcher paused until triage marks it green');
+    throw new Error(`staging is red; ${skills.triage} must diagnose and mark it green first`);
   const issue = eligible()[0];
   if (!issue) {
     console.error('No eligible issues.');
@@ -98,18 +108,16 @@ function main(): void {
   setStatus(issue.number, 'claimed');
   comment(
     issue.number,
-    `Dispatcher reclama esta issue para ejecución secuencial. Worker configurado: ${cfg.workerCommand ?? 'manual/Codex task'}.`,
+    `Dispatcher reclama esta issue para ejecución secuencial. Skill: ${skills.claim}. Worker: ${cfg.workerCommand ?? 'manual/Codex task'}.`,
   );
   setStatus(issue.number, 'in_progress');
   if (cfg.workerCommand)
     execFileSync(cfg.workerCommand, [String(issue.number)], { cwd: root, stdio: 'inherit' });
-  else
-    console.error(
-      'Worker no configurado; prepara el worker Codex manualmente y vuelve a ejecutar con loop.config.json.',
-    );
+  else console.error(`Worker no configurado; aplica la skill ${skills.work} manualmente.`);
   setStatus(issue.number, 'reviewing', { reviewRound: 1 });
-  console.error(
-    'PR/revisiones se coordinan mediante los comandos configurados; nunca se hace merge automático.',
+  comment(
+    issue.number,
+    `Siguiente fase: aplicar ${skills.review} y después ${skills.qa} sobre el PR, sin merge automático.`,
   );
 }
 try {

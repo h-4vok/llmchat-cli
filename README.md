@@ -34,3 +34,7 @@ La especificación canónica es la [issue #13](https://github.com/h-4vok/llmchat
 El flujo es deliberadamente secuencial: etiqueta `Automation Ready` → reclamo visible → worker → PR a `staging` → Staff/adversarial → QA/SDET → smoke tests → listo para merge humano. No hay merge automático a `main`, worktrees ni paralelismo. Si staging está rojo, el dispatcher se pausa y el rol Triage debe reparar y marcar `stagingGreen` en el estado antes de reanudar.
 
 Roles y procedimientos operativos: [`docs/loop-engineering-v1.md`](docs/loop-engineering-v1.md), [`docs/roles/`](docs/roles/).
+
+## Skills reutilizables
+
+Codex descubre las skills del loop en [`.codex/skills/`](.codex/skills/). Invócalas manualmente por nombre (`product-lead`, `dispatcher`, `worker`, `staff-reviewer`, `qa-sdet`, `triage-staging`) o deja que el dispatcher documente la skill activa en cada transición. Cada skill define entrada, salida, estado y límites de merge; los documentos de `docs/roles/` conservan únicamente el contexto operativo general.

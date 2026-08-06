@@ -1,0 +1,4 @@
+interface:
+  display_name: 'qa-sdet'
+  short_description: 'Reusable qa-sdet workflow'
+  default_prompt: 'Use the qa-sdet workflow for this repository.'

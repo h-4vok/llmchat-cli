@@ -1,0 +1,4 @@
+interface:
+  display_name: Worker
+  short_description: Implement claimed issues safely for staging PRs
+  default_prompt: Use the worker skill to implement the claimed issue, test it, and prepare a PR targeting staging without merging.
