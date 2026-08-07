@@ -13,6 +13,7 @@ import {
   prepareRecovery,
   recoverStaleLock,
   workerBranchName,
+  withIssueClosingReference,
   resetRunState,
   runCommand,
 } from '../dist/dispatcher.js';
@@ -170,6 +171,15 @@ test('commands use argv, exit codes, retries, timeout and no shell contract', as
       ),
     /failed/,
   );
+});
+
+test('PR closing reference uses the claimed issue exactly once for creation and recovery', () => {
+  assert.equal(withIssueClosingReference('Summary', 17), 'Summary\n\nCloses #17');
+  assert.equal(
+    withIssueClosingReference('Summary\n\nCloses #1\nClose #17\nclosed #99', 17),
+    'Summary\n\nCloses #17',
+  );
+  assert.throws(() => withIssueClosingReference('', 0), /issue number must be positive/);
 });
 
 test('dispatcher runs Worker, QA, then Staff and uses PR evidence instead of JSON', async () => {
