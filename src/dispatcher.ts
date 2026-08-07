@@ -664,6 +664,7 @@ async function runWorker(
       d,
       {
         ...spec,
+        env: { ...spec.env, LLMCHAT_ISSUE_NUMBER: String(issue.number) },
         input: rolePrompt(issue, 'worker', pr, round, context, feedback, d.load().headSha, runId),
       },
       issue.number,

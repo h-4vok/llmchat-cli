@@ -47,7 +47,7 @@ The flow is deliberately sequential: `Automation Ready` label → visible claim 
 
 If the Worker process disappears, the dispatcher detects the stale lease, reconstructs context from local state and the existing PR, and starts a replacement Worker. To prepare a recovery test for an existing PR without changing its code, run `npm run sloop -- --prepare-recovery 1 --pr <number>` and then run `npm run sloop` normally.
 
-For new work, the dispatcher fetches `origin/staging` and prepares the deterministic branch `codex/issue-<number>` from that exact remote SHA before starting the Worker. It persists the branch and `stagingBaseSha` in sloop state. Recovery reuses the persisted branch/PR and does not prepare a new branch. Worker PRs must target `staging`; another base is rejected.
+For new work, the dispatcher fetches `origin/staging` and prepares the deterministic branch `codex/issue-<number>` from that exact remote SHA before starting the Worker. It persists the branch and `stagingBaseSha` in sloop state. Recovery reuses the persisted branch/PR and does not prepare a new branch. Worker PRs must target `staging`; another base is rejected. The dispatcher passes the claimed issue number as `LLMCHAT_ISSUE_NUMBER`; the Worker keeps exactly one `Closes #<number>` reference in each PR so a human merge into `staging` closes the related issue through GitHub's configured rules.
 
 Roles and operating procedures: [`docs/sloop-engineering-v1.md`](docs/sloop-engineering-v1.md), [`docs/roles/`](docs/roles/).
 

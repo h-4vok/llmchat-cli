@@ -189,6 +189,7 @@ test('dispatcher runs Worker, QA, then Staff and uses PR evidence instead of JSO
       ['--sandbox', 'read-only'],
     ],
   );
+  assert.equal(h.runs[0].env.LLMCHAT_ISSUE_NUMBER, '1');
   assert.equal(h.reviews[0].body.startsWith('[QA/SDET Review]'), true);
   assert.equal(h.reviews[1].body.startsWith('[Staff Review]'), true);
   assert.equal(h.state().branch, 'codex/issue-1');
