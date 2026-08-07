@@ -13,6 +13,16 @@ function run(configHome, ...args) {
   });
 }
 
+function configFile(configHome) {
+  const relative =
+    process.platform === 'win32'
+      ? ['llmchat', 'config.json']
+      : process.platform === 'darwin'
+        ? ['Library', 'Application Support', 'llmchat', 'config.json']
+        : ['.config', 'llmchat', 'config.json'];
+  return join(configHome, ...relative);
+}
+
 test('chat supports provider precedence and deterministic output', () => {
   const configHome = mkdtempSync(join(tmpdir(), 'llmchat-cli-'));
   const missing = run(configHome, 'chat', 'hello');
@@ -26,17 +36,17 @@ test('chat supports provider precedence and deterministic output', () => {
   assert.equal(afterPrompt.status, 0);
   assert.match(afterPrompt.stdout, /gemini.*hello/i);
   assert.equal(run(configHome, 'config', 'set-default-provider', 'gemini').status, 0);
-  const configFile = join(configHome, 'llmchat', 'config.json');
-  const config = JSON.parse(readFileSync(configFile, 'utf8'));
+  const file = configFile(configHome);
+  const config = JSON.parse(readFileSync(file, 'utf8'));
   assert.equal(config.schemaVersion, 1);
   config.futureSetting = { enabled: true };
-  writeFileSync(configFile, `${JSON.stringify(config)}\n`);
+  writeFileSync(file, `${JSON.stringify(config)}\n`);
   assert.equal(run(configHome, 'config', 'set-default-provider', 'gemini').status, 0);
-  assert.deepEqual(JSON.parse(readFileSync(configFile, 'utf8')).futureSetting, { enabled: true });
+  assert.deepEqual(JSON.parse(readFileSync(file, 'utf8')).futureSetting, { enabled: true });
   const saved = run(configHome, 'chat', 'hello');
   assert.match(saved.stdout, /gemini.*hello/i);
   assert.equal(run(configHome, 'chat', 'hello', '--provider', 'openai').status !== 0, true);
-  assert.match(readFileSync(join(configHome, 'llmchat', 'config.json'), 'utf8'), /gemini/);
+  assert.match(readFileSync(file, 'utf8'), /gemini/);
 });
 
 test('configuration validation, clearing, and help are predictable', () => {
@@ -53,7 +63,7 @@ test('configuration validation, clearing, and help are predictable', () => {
   assert.equal(run(configHome, 'chat', '--help').status, 0);
   assert.equal(run(configHome, 'config', 'set-default-provider', 'gemini').status, 0);
   assert.equal(run(configHome, 'config', 'clear-default-provider').status, 0);
-  const cleared = JSON.parse(readFileSync(join(configHome, 'llmchat', 'config.json'), 'utf8'));
+  const cleared = JSON.parse(readFileSync(configFile(configHome), 'utf8'));
   assert.equal(cleared.schemaVersion, 1);
   assert.equal(cleared.defaultProvider, undefined);
   assert.equal(run(configHome, 'config', 'clear-default-provider').status, 0);
@@ -62,8 +72,8 @@ test('configuration validation, clearing, and help are predictable', () => {
 
 test('malformed configuration fails without replacing the file', () => {
   const configHome = mkdtempSync(join(tmpdir(), 'llmchat-cli-'));
-  const file = join(configHome, 'llmchat', 'config.json');
-  mkdirSync(join(configHome, 'llmchat'), { recursive: true });
+  const file = configFile(configHome);
+  mkdirSync(join(file, '..'), { recursive: true });
   writeFileSync(file, '{not-json');
   const result = run(configHome, 'chat', 'hello');
   assert.notEqual(result.status, 0);
