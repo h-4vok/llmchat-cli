@@ -11,6 +11,7 @@ import {
   dispatch,
   prepareWorkerBranch,
   prepareRecovery,
+  recoverStaleLock,
   workerBranchName,
   resetRunState,
   runCommand,
@@ -36,6 +37,7 @@ function harness(
 ) {
   const root = mkdtempSync(join(tmpdir(), 'llmchat-'));
   let state = overrides.initialState ?? {};
+  const saves = [];
   const comments = [];
   const runs = [];
   const reviews = [];
@@ -76,6 +78,7 @@ function harness(
     root,
     load: () => state,
     save: (next) => {
+      saves.push(structuredClone(next));
       state = next;
     },
     eligible: () => issues,
@@ -94,9 +97,6 @@ function harness(
             body: `[Worker] round=${round} status=ready_for_review pr=${pr.number} base=staging commit=${pr.headRefOid}`,
             createdAt: `${workerCount}`,
           });
-        if (overrides.workerGuide !== false)
-          pr.comments.at(-1).body +=
-            `\n\n[Human Verification]\n\`\`\`json\n${JSON.stringify({ summary: 'Exercise the CLI change.', steps: ['Run the focused command.'], expected: ['The documented output appears.'], isolation: 'Use a temporary checkout and no credentials.', limitations: ['A failed command indicates the change is not ready.'], checklist: ['Behavior matches the acceptance criteria.'] })}\n\`\`\``;
         return `WORKER_RESULT pr=${pr.number} base=staging`;
       }
       if (role === 'qa') {
@@ -142,6 +142,7 @@ function harness(
     comments,
     runs,
     reviews,
+    saves,
     deps,
     state: () => state,
     setState: (next) => {
@@ -190,10 +191,6 @@ test('dispatcher runs Worker, QA, then Staff and uses PR evidence instead of JSO
   );
   assert.equal(h.reviews[0].body.startsWith('[QA/SDET Review]'), true);
   assert.equal(h.reviews[1].body.startsWith('[Staff Review]'), true);
-  assert.equal(
-    h.comments.some(([, body]) => body.startsWith('[Human Review Guide]')),
-    true,
-  );
   assert.equal(h.state().branch, 'codex/issue-1');
   assert.equal(h.state().stagingBaseSha, 'staging-sha-1');
 });
@@ -301,11 +298,67 @@ test('dispatcher stops after one issue instead of draining the queue', async () 
   assert.deepEqual(h.state().completedIssues, [1]);
 });
 
-test('missing human guide never announces ready_for_human_merge', async () => {
-  const h = harness([{ number: 1, title: 'first' }], { workerGuide: false });
+test('new issue claim clears the completed issue PR context before validation', async () => {
+  const h = harness(
+    [
+      { number: 16, title: 'completed' },
+      { number: 17, title: 'next issue', body: 'new acceptance criteria' },
+    ],
+    {
+      headRefName: 'codex/issue-17',
+      initialState: {
+        issue: 16,
+        status: 'ready_for_human_merge',
+        pr: 16,
+        branch: 'codex/issue-16',
+        headSha: 'old-head',
+        stagingBaseSha: 'old-staging',
+        reviewRound: 9,
+        lastCiFeedback: 'old CI feedback',
+        lastQaFeedback: 'old QA feedback',
+        lastStaffFeedback: 'old Staff feedback',
+        taskContext: 'old task context',
+        workerRunId: 'old-run',
+        workerPid: 123,
+        workerStartedAt: 1,
+        workerHeartbeatAt: 1,
+        workerRecoveryCount: 4,
+        lastError: 'old error',
+        completedIssues: [16],
+        stagingGreen: true,
+      },
+    },
+  );
+  const validatedPrs = [];
+  const pullRequest = h.deps.pullRequest;
+  h.deps.pullRequest = (pr) => {
+    validatedPrs.push(pr);
+    return pullRequest(pr);
+  };
+
   await dispatch(h.cfg, h.deps);
-  assert.equal(h.state().status, 'blocked');
-  assert.match(h.state().lastError, /complete \[Human Verification\] guide/);
+
+  const claimSave = h.saves.find((saved) => saved.status === 'claimed');
+  assert.deepEqual(claimSave, {
+    completedIssues: [16],
+    stagingGreen: true,
+    issue: 17,
+    status: 'claimed',
+    reviewRound: 1,
+    drainStatus: 'running',
+    updatedAt: claimSave.updatedAt,
+  });
+  assert.equal(h.runs[0].input.includes('An existing PR is #16'), false);
+  assert.equal(h.runs[0].input.includes('old task context'), false);
+  assert.equal(h.state().branch, 'codex/issue-17');
+  assert.equal(h.state().pr, 14);
+  assert.equal(validatedPrs.length > 0, true);
+  assert.equal(
+    validatedPrs.every((pr) => pr === 14),
+    true,
+  );
+  assert.deepEqual(h.state().completedIssues, [16, 17]);
+  assert.equal(h.state().stagingGreen, true);
 });
 
 test('QA changes return to Worker and QA is repeated before Staff', async () => {
@@ -371,6 +424,28 @@ test('new branch preparation failure is persisted and does not leave a claimed r
   assert.equal(h.state().lastError, 'fetch failed');
 });
 
+test('blocked issue with PR context enters recovery instead of a fresh claim', async () => {
+  const h = harness([{ number: 1, title: 'recover me' }], {
+    initialState: {
+      issue: 1,
+      status: 'blocked',
+      pr: 14,
+      branch: 'codex/issue-1',
+      headSha: 'old-head',
+      reviewRound: 3,
+      lastQaFeedback: 'actionable QA finding',
+    },
+  });
+  h.deps.prepareWorkerBranch = () => {
+    throw new Error('fresh claim path must not run');
+  };
+  h.deps.checkoutWorkerBranch = () => {};
+  await dispatch(h.cfg, h.deps);
+  assert.equal(h.runs[0].input.includes('An existing PR is #14'), true);
+  assert.equal(h.runs[0].input.includes('actionable QA finding'), true);
+  assert.equal(h.state().status, 'ready_for_human_merge');
+});
+
 test('recovery rejects a non-deterministic persisted branch', async () => {
   const h = harness([{ number: 1, title: 'a' }], {
     initialState: prepareRecovery({ completedIssues: [1], branch: 'main' }, 1, 14, Date.now(), 100),
@@ -420,7 +495,7 @@ test('failed PR CI returns the issue to a recovered Worker without local npm gat
 test('successful role process without a published review blocks the dispatcher', async () => {
   const h = harness([{ number: 1, title: 'a' }], { publishEvidence: { staff: false } });
   await dispatch(h.cfg, h.deps);
-  assert.equal(h.state().status, 'blocked');
+  assert.equal(h.state().status, 'worker_recovery_pending');
   assert.match(h.state().lastError, /did not publish \[Staff Review\]/);
 });
 
@@ -468,7 +543,17 @@ test('status remains observable while an active task is stored', () => {
 
 test('prepareRecovery preserves PR and removes only the issue from completion', () => {
   const state = prepareRecovery(
-    { pr: 15, completedIssues: [1, 2], status: 'done' },
+    {
+      pr: 15,
+      branch: 'codex/issue-1',
+      headSha: 'head-15',
+      stagingBaseSha: 'staging-10',
+      reviewRound: 4,
+      lastQaFeedback: 'fix the boundary case',
+      taskContext: 'recovered task context',
+      completedIssues: [1, 2],
+      status: 'done',
+    },
     1,
     15,
     1000,
@@ -479,6 +564,52 @@ test('prepareRecovery preserves PR and removes only the issue from completion', 
   assert.deepEqual(state.completedIssues, [2]);
   assert.equal(state.workerPid, -1);
   assert.equal(state.workerHeartbeatAt, 899);
+  assert.equal(state.reviewRound, 4);
+  assert.equal(state.lastQaFeedback, 'fix the boundary case');
+  assert.equal(state.taskContext, 'recovered task context');
+  assert.equal(state.headSha, 'head-15');
+});
+
+test('no-work done state clears all prior run context', async () => {
+  const h = harness([], {
+    initialState: {
+      issue: 9,
+      status: 'blocked',
+      pr: 14,
+      branch: 'codex/issue-9',
+      headSha: 'old-head',
+      stagingBaseSha: 'old-staging',
+      reviewRound: 4,
+      lastCiFeedback: 'old CI',
+      lastQaFeedback: 'old QA',
+      lastStaffFeedback: 'old Staff',
+      taskContext: 'old context',
+      workerRunId: 'old-run',
+      workerPid: 123,
+      workerStartedAt: 1,
+      workerHeartbeatAt: 1,
+      workerRecoveryCount: 2,
+      lastError: 'old error',
+      completedIssues: [8],
+      stagingGreen: true,
+    },
+  });
+  h.setState({
+    completedIssues: [8],
+    stagingGreen: true,
+    status: undefined,
+    issue: undefined,
+    pr: undefined,
+    branch: undefined,
+  });
+  await dispatch(h.cfg, h.deps);
+  assert.deepEqual(h.state(), {
+    completedIssues: [8],
+    stagingGreen: true,
+    status: 'done',
+    drainStatus: 'done',
+    updatedAt: h.state().updatedAt,
+  });
 });
 
 test('resetRunState clears stale run context and preserves completed issues', () => {
@@ -508,6 +639,29 @@ test('resetRunState refuses a live Worker', () => {
     () => resetRunState({ status: 'worker_running', workerPid: 123 }, () => true),
     /cannot reset while Worker process 123 is still running/,
   );
+});
+
+test('recoverStaleLock removes only a lock owned by a dead process', () => {
+  const root = mkdtempSync(join(tmpdir(), 'llmchat-lock-'));
+  const lock = dispatcherLockPath(root);
+  mkdirSync(lock, { recursive: true });
+  writeFileSync(join(lock, 'owner.json'), JSON.stringify({ pid: 9999 }));
+  assert.match(
+    recoverStaleLock(root, () => false),
+    /Recovered stale dispatcher lock/,
+  );
+  assert.equal(existsSync(lock), false);
+  rmSync(root, { recursive: true, force: true });
+});
+
+test('recoverStaleLock refuses a live owner', () => {
+  const root = mkdtempSync(join(tmpdir(), 'llmchat-lock-'));
+  const lock = dispatcherLockPath(root);
+  mkdirSync(lock, { recursive: true });
+  writeFileSync(join(lock, 'owner.json'), JSON.stringify({ pid: 9999 }));
+  assert.throws(() => recoverStaleLock(root, () => true), /owner PID 9999 is still running/);
+  assert.equal(existsSync(lock), true);
+  rmSync(root, { recursive: true, force: true });
 });
 
 test('dead reclaim marker recovers after its TTL', () => {
