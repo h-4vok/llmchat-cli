@@ -15,6 +15,7 @@ function run(configHome, ...args) {
       HOME: configHome,
       USERPROFILE: configHome,
       LOCALAPPDATA: configHome,
+      XDG_CONFIG_HOME: join(configHome, '.config'),
       ...options.env,
     },
   });
