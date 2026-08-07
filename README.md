@@ -27,6 +27,16 @@ npm run build
 npm test
 ```
 
+To install the current checkout as the global `llmchat` command while developing:
+
+```text
+npm run install:global
+llmchat --help
+llmchat chat --provider gemini "hello"
+```
+
+Remove the global development link with `npm run uninstall:global`.
+
 This repository contains the skeleton and the first end-to-end Gemini route. Open decisions are tracked as GitHub issues.
 
 ## Loop engineering v1
