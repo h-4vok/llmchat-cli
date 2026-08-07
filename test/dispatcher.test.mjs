@@ -93,8 +93,9 @@ function harness(
             body: `[Worker] round=${round} status=ready_for_review pr=${pr.number} base=staging commit=${pr.headRefOid}`,
             createdAt: `${workerCount}`,
           });
-        pr.comments.at(-1).body +=
-          `\n\n[Human Verification]\n\`\`\`json\n${JSON.stringify({ summary: 'Exercise the CLI change.', steps: ['Run the focused command.'], expected: ['The documented output appears.'], isolation: 'Use a temporary checkout and no credentials.', limitations: ['A failed command indicates the change is not ready.'], checklist: ['Behavior matches the acceptance criteria.'] })}\n\`\`\``;
+        if (overrides.workerGuide !== false)
+          pr.comments.at(-1).body +=
+            `\n\n[Human Verification]\n\`\`\`json\n${JSON.stringify({ summary: 'Exercise the CLI change.', steps: ['Run the focused command.'], expected: ['The documented output appears.'], isolation: 'Use a temporary checkout and no credentials.', limitations: ['A failed command indicates the change is not ready.'], checklist: ['Behavior matches the acceptance criteria.'] })}\n\`\`\``;
         return `WORKER_RESULT pr=${pr.number} base=staging`;
       }
       if (role === 'qa') {
@@ -230,6 +231,13 @@ test('dispatcher stops after one issue instead of draining the queue', async () 
   assert.equal(h.state().status, 'ready_for_human_merge');
   assert.deepEqual(h.counts(), { workerCount: 1, qaCount: 1, staffCount: 1 });
   assert.deepEqual(h.state().completedIssues, [1]);
+});
+
+test('missing human guide never announces ready_for_human_merge', async () => {
+  const h = harness([{ number: 1, title: 'first' }], { workerGuide: false });
+  await dispatch(h.cfg, h.deps);
+  assert.equal(h.state().status, 'blocked');
+  assert.match(h.state().lastError, /complete \[Human Verification\] guide/);
 });
 
 test('QA changes return to Worker and QA is repeated before Staff', async () => {

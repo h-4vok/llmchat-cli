@@ -855,8 +855,8 @@ async function processIssue(cfg: Config, d: Deps, issue: Issue): Promise<void> {
       headSha: evidence.headRefOid,
       lastStaffFeedback: staff.body,
     });
-    status(d, issue.number, 'ready_for_human_merge', { pr, headSha: evidence.headRefOid });
     publishHumanReviewGuide(d, evidence, round);
+    status(d, issue.number, 'ready_for_human_merge', { pr, headSha: evidence.headRefOid });
     d.save({
       ...d.load(),
       completedIssues: [...new Set([...(d.load().completedIssues ?? []), issue.number])],
