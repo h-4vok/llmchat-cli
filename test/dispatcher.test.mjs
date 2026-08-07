@@ -10,6 +10,8 @@ import {
   dispatcherLockPath,
   dispatch,
   prepareRecovery,
+  workerBranchName,
+  resetRunState,
   runCommand,
 } from '../dist/dispatcher.js';
 
@@ -127,6 +129,10 @@ function harness(
     pid: () => process.pid,
     processAlive: (pid) => pid > 0 && pid !== -1,
     sleep: async () => {},
+    prepareWorkerBranch: (issue) => ({
+      branch: workerBranchName(issue),
+      stagingBaseSha: 'staging-sha-1',
+    }),
   };
 
   return {
@@ -186,6 +192,13 @@ test('dispatcher runs Worker, QA, then Staff and uses PR evidence instead of JSO
     h.comments.some(([, body]) => body.startsWith('[Human Review Guide]')),
     true,
   );
+  assert.equal(h.state().branch, 'codex/issue-1');
+  assert.equal(h.state().stagingBaseSha, 'staging-sha-1');
+});
+
+test('worker branch convention is deterministic and rejects invalid issue numbers', () => {
+  assert.equal(workerBranchName(16), 'codex/issue-16');
+  assert.throws(() => workerBranchName(0), /issue number must be positive/);
 });
 
 test('dispatcher stops after one issue instead of draining the queue', async () => {
@@ -228,6 +241,9 @@ test('recovery detects stale Worker state, starts a new Worker and reuses the ex
   const h = harness([{ number: 1, title: 'a' }], {
     initialState: prepareRecovery({ completedIssues: [1] }, 1, 14, now, 100),
   });
+  h.deps.prepareWorkerBranch = () => {
+    throw new Error('recovery must reuse the existing branch');
+  };
   await dispatch(h.cfg, h.deps);
   assert.equal(h.state().status, 'ready_for_human_merge');
   assert.equal(h.state().pr, 14);
@@ -337,6 +353,35 @@ test('prepareRecovery preserves PR and removes only the issue from completion', 
   assert.deepEqual(state.completedIssues, [2]);
   assert.equal(state.workerPid, -1);
   assert.equal(state.workerHeartbeatAt, 899);
+});
+
+test('resetRunState clears stale run context and preserves completed issues', () => {
+  const state = resetRunState(
+    {
+      issue: 21,
+      pr: 20,
+      branch: 'codex/issue-3',
+      status: 'worker_recovery_pending',
+      workerPid: -1,
+      completedIssues: [1, 2, 3],
+      stagingGreen: true,
+      lastError: 'stale worker',
+    },
+    () => false,
+  );
+  assert.deepEqual(state.completedIssues, [1, 2, 3]);
+  assert.equal(state.status, undefined);
+  assert.equal(state.pr, undefined);
+  assert.equal(state.branch, undefined);
+  assert.equal(state.lastError, undefined);
+  assert.equal(state.drainStatus, 'running');
+});
+
+test('resetRunState refuses a live Worker', () => {
+  assert.throws(
+    () => resetRunState({ status: 'worker_running', workerPid: 123 }, () => true),
+    /cannot reset while Worker process 123 is still running/,
+  );
 });
 
 test('dead reclaim marker recovers after its TTL', () => {

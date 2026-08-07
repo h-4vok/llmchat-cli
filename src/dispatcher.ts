@@ -37,6 +37,7 @@ export type State = {
   status?: Status;
   pr?: number;
   branch?: string;
+  stagingBaseSha?: string;
   headSha?: string;
   reviewRound?: number;
   attempt?: number;
@@ -114,6 +115,7 @@ type Deps = {
   processAlive?: (pid: number) => boolean;
   sleep?: (ms: number) => Promise<void>;
   onReclaim?: () => void;
+  prepareWorkerBranch?: (issue: number) => { branch: string; stagingBaseSha: string };
 };
 type Spec = {
   command: string;
@@ -708,14 +710,14 @@ async function runWorker(
   d.save({
     ...d.load(),
     pr: metadata.pr,
-    branch: evidence.headRefName,
+    branch: d.load().branch ?? evidence.headRefName,
     headSha: evidence.headRefOid,
     workerPid: undefined,
     workerHeartbeatAt: d.now(),
   });
   status(d, issue.number, 'worker_ready_for_review', {
     pr: metadata.pr,
-    branch: evidence.headRefName,
+    branch: d.load().branch ?? evidence.headRefName,
     headSha: evidence.headRefOid,
   });
   return metadata.pr;
@@ -890,6 +892,36 @@ export function prepareRecovery(
   };
 }
 
+export function workerBranchName(issue: number): string {
+  if (!Number.isInteger(issue) || issue <= 0) throw new Error('issue number must be positive');
+  return `codex/issue-${issue}`;
+}
+
+export function prepareWorkerBranch(
+  issue: number,
+  cwd = root,
+): { branch: string; stagingBaseSha: string } {
+  const branch = workerBranchName(issue);
+  execFileSync('git', ['fetch', 'origin', 'staging'], { cwd, stdio: 'inherit' });
+  const stagingBaseSha = execFileSync('git', ['rev-parse', 'origin/staging'], {
+    cwd,
+    encoding: 'utf8',
+  }).trim();
+  execFileSync('git', ['checkout', '-B', branch, 'origin/staging'], { cwd, stdio: 'inherit' });
+  return { branch, stagingBaseSha };
+}
+
+export function resetRunState(state: State, processAlive = defaultProcessAlive): State {
+  if (isActiveStatus(state.status) && state.workerPid && processAlive(state.workerPid))
+    throw new Error(`cannot reset while Worker process ${state.workerPid} is still running`);
+  return {
+    completedIssues: state.completedIssues ?? [],
+    stagingGreen: state.stagingGreen,
+    drainStatus: 'running',
+    updatedAt: Date.now(),
+  };
+}
+
 export function acquire(d: Deps, ttl: number): string {
   const token = randomUUID();
   const lock = dispatcherLockPath(d.root);
@@ -984,6 +1016,14 @@ export async function dispatch(cfg: Config, d: Deps): Promise<void> {
       } else {
         status(d, issue.number, 'claimed', { pr: d.load().pr });
         d.comment(issue.number, 'Dispatcher reclama esta issue de forma exclusiva.');
+        const prepared = (d.prepareWorkerBranch ?? ((number) => prepareWorkerBranch(number)))(
+          issue.number,
+        );
+        d.save({
+          ...d.load(),
+          branch: prepared.branch,
+          stagingBaseSha: prepared.stagingBaseSha,
+        });
       }
       try {
         await processIssue(cfg, d, issue);
@@ -1026,6 +1066,12 @@ async function main() {
     : {};
   if (args.includes('--list')) {
     console.log(JSON.stringify(eligible(), null, 2));
+    return;
+  }
+  if (args.includes('--reset')) {
+    const state = readState();
+    writeState(resetRunState(state));
+    console.log('Estado local del loop reiniciado. Ejecutá npm run loop.');
     return;
   }
   const recoveryIndex = args.indexOf('--prepare-recovery');
