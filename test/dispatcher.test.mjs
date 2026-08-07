@@ -224,6 +224,16 @@ test('dispatcher persists one closing reference for the claimed issue on create 
   assert.equal((h.prBodyUpdates[0].body.match(/^Closes #17$/gm) ?? []).length, 1);
 });
 
+test('worker creation contract includes the normalized claimed-issue body', async () => {
+  const h = harness([{ number: 17, title: 'seventeen', body: 'criteria' }]);
+  await dispatch(h.cfg, h.deps);
+  const workerInput =
+    h.runs.find((run) => run.input?.includes('Use the worker skill'))?.input ?? '';
+  assert.match(workerInput, /When creating or updating the PR, read its current body/);
+  assert.match(workerInput, /exactly one line `Closes #17`/);
+  assert.match(workerInput, /Use gh pr create\/edit \(or equivalent\) to persist that body/);
+});
+
 test('worker branch convention is deterministic and rejects invalid issue numbers', () => {
   assert.equal(workerBranchName(16), 'codex/issue-16');
   assert.throws(() => workerBranchName(0), /issue number must be positive/);
