@@ -700,6 +700,11 @@ async function runWorker(
     );
   if (evidence.baseRefName !== (cfg.baseBranch ?? 'staging'))
     throw new Error(`PR #${metadata.pr} must target ${cfg.baseBranch ?? 'staging'}`);
+  const expectedWorkerBranch = workerBranchName(issue.number);
+  if (evidence.headRefName !== expectedWorkerBranch)
+    throw new Error(
+      `PR #${metadata.pr} must use worker branch ${expectedWorkerBranch}; found ${evidence.headRefName}`,
+    );
   if (
     evidence.mergeable?.toUpperCase() === 'CONFLICTING' ||
     evidence.mergeStateStatus?.toUpperCase() === 'DIRTY'

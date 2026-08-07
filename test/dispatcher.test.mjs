@@ -42,7 +42,7 @@ function harness(
     number: 14,
     state: 'OPEN',
     baseRefName: 'staging',
-    headRefName: 'codex/test',
+    headRefName: overrides.headRefName ?? 'codex/issue-1',
     headRefOid: 'abc0',
     mergeStateStatus: 'CLEAN',
     mergeable: 'MERGEABLE',
@@ -201,6 +201,17 @@ test('worker branch convention is deterministic and rejects invalid issue number
   assert.throws(() => workerBranchName(0), /issue number must be positive/);
 });
 
+test('dispatcher rejects a PR whose worker branch violates the convention', async () => {
+  const h = harness([{ number: 1, title: 'branch validation' }], {
+    headRefName: 'codex/other-branch',
+  });
+  await dispatch(h.cfg, h.deps);
+  assert.match(
+    h.state().lastError,
+    /must use worker branch codex\/issue-1; found codex\/other-branch/,
+  );
+});
+
 test('dispatcher stops after one issue instead of draining the queue', async () => {
   const h = harness([
     { number: 1, title: 'first' },
@@ -260,7 +271,7 @@ test('conflicting Worker PR is rejected before reviews', async () => {
     number: 14,
     state: 'OPEN',
     baseRefName: 'staging',
-    headRefName: 'codex/test',
+    headRefName: 'codex/issue-1',
     headRefOid: 'abc1',
     mergeStateStatus: 'DIRTY',
     mergeable: 'CONFLICTING',
