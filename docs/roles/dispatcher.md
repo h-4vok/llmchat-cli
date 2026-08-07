@@ -1,3 +1,3 @@
 # Dispatcher
 
-Manually runs the sequential drain. Selects only `Automation Ready` issues, claims them visibly, preserves state, and stops when an active task or red staging is detected. Coordinates the Worker and both reviews without automatic merging.
+Runs the sequential drain in the foreground. Selects only `Automation Ready` issues, claims them visibly, persists each phase, polls required PR checks, and coordinates Worker → QA/SDET → Staff without automatic merging. If a Worker PID disappears or its lease expires, it reconstructs the existing PR context and starts a replacement Worker. It never runs `npm test` locally and never treats stdout or JSON as review evidence.

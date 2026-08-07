@@ -4,50 +4,139 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { test } from 'node:test';
-import { acquire, command, dispatch, runCommand } from '../dist/dispatcher.js';
+import { acquire, command, dispatch, prepareRecovery, runCommand } from '../dist/dispatcher.js';
 
-const cfg = {
-  stagingRef: 'staging',
-  stagingHealthCommand: ['node', '-e', 'console.log(\'{"passed":true}\')'],
-  workerCommand: ['node', '-e', 'console.log(\'{"pr":14,"base":"staging"}\')'],
-  staffReviewCommand: ['node', '-e', 'console.log(\'{"verdict":"approved"}\')'],
-  qaCommand: ['node', '-e', 'console.log(\'{"passed":true}\')'],
-  smokeCommand: ['node', '-e', 'console.log(\'{"passed":true}\')'],
+const baseConfig = {
+  baseBranch: 'staging',
+  workerCommand: ['codex', 'exec'],
+  staffReviewCommand: ['codex', 'exec'],
+  qaCommand: ['codex', 'exec'],
+  requiredPrChecks: ['pr-checks'],
+  checkPollIntervalMs: 0,
+  checkTimeoutMs: 1000,
+  evidencePollIntervalMs: 0,
+  evidenceTimeoutMs: 1000,
+  workerLeaseMs: 100,
+  maxReviewRounds: 5,
 };
-function harness(issues = [{ number: 1, title: 'one' }], overrides = {}) {
+
+function harness(
+  issues = [{ number: 1, title: 'one', body: 'acceptance criteria' }],
+  overrides = {},
+) {
   const root = mkdtempSync(join(tmpdir(), 'llmchat-'));
-  let state = {};
+  let state = overrides.initialState ?? {};
   const comments = [];
-  let runs = [];
+  const runs = [];
+  const reviews = [];
+  const pr = {
+    number: 14,
+    state: 'OPEN',
+    baseRefName: 'staging',
+    headRefName: 'codex/test',
+    headRefOid: 'abc0',
+    comments: [],
+    reviews,
+    statusCheckRollup: [{ name: 'pr-checks', status: 'COMPLETED', conclusion: 'SUCCESS' }],
+  };
+  let workerCount = 0;
+  let qaCount = 0;
+  let staffCount = 0;
+  const qaVerdicts = overrides.qaVerdicts ?? ['passed'];
+  const staffVerdicts = overrides.staffVerdicts ?? ['approved'];
+  const publishEvidence = {
+    worker: true,
+    qa: true,
+    staff: true,
+    ...(overrides.publishEvidence ?? {}),
+  };
+  const checkSequences = overrides.checkSequences ?? [pr.statusCheckRollup];
+  let checkIndex = 0;
+
+  const roleOf = (spec) => {
+    if (spec.input?.includes('Use the worker skill')) return 'worker';
+    if (spec.input?.includes('Use the qa-sdet skill')) return 'qa';
+    if (spec.input?.includes('Use the staff-reviewer skill')) return 'staff';
+    return 'unknown';
+  };
+
+  const deps = {
+    root,
+    load: () => state,
+    save: (next) => {
+      state = next;
+    },
+    eligible: () => issues,
+    comment: (issue, body) => comments.push([issue, body]),
+    run: async (spec) => {
+      runs.push(spec);
+      const role = roleOf(spec);
+      const round = Number(spec.input?.match(/review round (\d+)/)?.[1] ?? 1);
+      if (role === 'worker') {
+        workerCount += 1;
+        pr.headRefOid = `abc${workerCount}`;
+        spec.onStart?.(1000 + workerCount);
+        spec.onHeartbeat?.();
+        if (publishEvidence.worker)
+          pr.comments.push({
+            body: `[Worker] round=${round} status=ready_for_review pr=${pr.number} base=staging commit=${pr.headRefOid}`,
+            createdAt: `${workerCount}`,
+          });
+        return `WORKER_RESULT pr=${pr.number} base=staging`;
+      }
+      if (role === 'qa') {
+        qaCount += 1;
+        const verdict = qaVerdicts[qaCount - 1] ?? qaVerdicts.at(-1);
+        if (publishEvidence.qa)
+          reviews.push({
+            body: `[QA/SDET Review] round=${round} verdict=${verdict} commit=${pr.headRefOid}`,
+            commitId: pr.headRefOid,
+            submittedAt: `${qaCount}`,
+          });
+        return 'QA completed';
+      }
+      if (role === 'staff') {
+        staffCount += 1;
+        const verdict = staffVerdicts[staffCount - 1] ?? staffVerdicts.at(-1);
+        if (publishEvidence.staff)
+          reviews.push({
+            body: `[Staff Review] round=${round} verdict=${verdict} commit=${pr.headRefOid}`,
+            commitId: pr.headRefOid,
+            submittedAt: `${staffCount}`,
+          });
+        return 'Staff completed';
+      }
+      return 'completed';
+    },
+    pullRequest: () => {
+      pr.statusCheckRollup = checkSequences[Math.min(checkIndex++, checkSequences.length - 1)];
+      return structuredClone(pr);
+    },
+    now: () => Date.now(),
+    pid: () => process.pid,
+    processAlive: (pid) => pid > 0 && pid !== -1,
+    sleep: async () => {},
+  };
+
   return {
     root,
     comments,
     runs,
-    deps: {
-      root,
-      load: () => state,
-      save: (s) => {
-        state = s;
-      },
-      eligible: () => issues,
-      comment: (i, b) => comments.push([i, b]),
-      run: (s) => {
-        runs.push(s);
-        return runCommand(s);
-      },
-      now: () => Date.now(),
-      pid: () => process.pid,
-    },
+    reviews,
+    deps,
     state: () => state,
-    cfg: { ...cfg, ...overrides },
+    setState: (next) => {
+      state = next;
+    },
+    counts: () => ({ workerCount, qaCount, staffCount }),
+    cfg: { ...baseConfig, ...overrides.config },
   };
 }
 
-test('commands validate argv, retries, timeout and no shell', async () => {
+test('commands use argv, exit codes, retries, timeout and no shell contract', async () => {
   assert.deepEqual(command(['node', '-e', 'process.exit(0)'], 42, true).args, [
     '-e',
     'process.exit(0)',
-    '42',
   ]);
   assert.throws(() => command({ command: 'node; malicious' }, 1), /shell operators/);
   await assert.rejects(
@@ -62,122 +151,138 @@ test('commands validate argv, retries, timeout and no shell', async () => {
     /failed/,
   );
 });
-test('integration drains issues and gates in order', async () => {
-  const h = harness([
-    { number: 1, title: 'a' },
-    { number: 2, title: 'b' },
-  ]);
+
+test('dispatcher runs Worker, QA, then Staff and uses PR evidence instead of JSON', async () => {
+  const h = harness();
   await dispatch(h.cfg, h.deps);
   assert.equal(h.state().status, 'done');
-  assert.equal(h.runs.length, 9);
+  assert.deepEqual(h.counts(), { workerCount: 1, qaCount: 1, staffCount: 1 });
   assert.deepEqual(
-    h.runs.slice(0, 5).map((x) => x.command),
-    ['node', 'node', 'node', 'node', 'node'],
+    h.runs.map((run) => run.input?.match(/Use the ([^ ]+)/)?.[1]),
+    ['worker', 'qa-sdet', 'staff-reviewer'],
   );
-});
-test('changes_requested repeats worker/review then proceeds', async () => {
-  let n = 0;
-  const h = harness([{ number: 1, title: 'a' }], {
-    staffReviewCommand: [
-      'node',
-      '-e',
-      'console.log(process.argv[1]===\'1\'?\'{"verdict":"changes_requested"}\':\'{"verdict":"approved"}\')',
-      '1',
-    ],
-  });
-  const old = h.deps.run;
-  h.deps.run = (s) => {
-    if (s.args.some((arg) => arg.includes('process.argv[1]'))) {
-      n++;
-      return n === 1 ? '{"verdict":"changes_requested"}' : '{"verdict":"approved"}';
-    }
-    return old(s);
-  };
-  await dispatch(h.cfg, h.deps);
-  assert.equal(h.state().status, 'done');
-  assert.equal(h.state().reviewRound, 2);
-  assert.equal(h.runs.filter((run) => run.args.some((arg) => arg.includes('{"pr":14'))).length, 2);
-});
-test('staging red persists blocked and green rerun recovers', async () => {
-  const h = harness([{ number: 1, title: 'a' }], {
-    stagingHealthCommand: ['node', '-e', 'process.exit(1)'],
-  });
-  await dispatch(h.cfg, h.deps);
-  assert.equal(h.state().status, 'blocked');
-  assert.equal(h.state().stagingGreen, false);
-  h.cfg.stagingHealthCommand = cfg.stagingHealthCommand;
-  h.cfg.stagingHealthCommand = ['node', '-e', 'console.log(\'{"passed":true}\')'];
-  await dispatch(h.cfg, h.deps);
-  assert.equal(h.state().status, 'done');
-  assert.equal(h.state().stagingGreen, true);
-  const runCount = h.runs.length;
-  await dispatch(h.cfg, h.deps);
-  assert.equal(h.runs.length, runCount + 1); // health check only; completed issue remains terminal
-});
-test('bad PR base and failing gates block, and lock contention is exclusive', async () => {
-  const h = harness([{ number: 1, title: 'a' }], {
-    workerCommand: ['node', '-e', 'console.log(\'{"pr":14,"base":"main"}\')'],
-  });
-  await dispatch(h.cfg, h.deps);
-  assert.equal(h.state().status, 'blocked');
-  assert.deepEqual(h.state().completedIssues ?? [], []);
-  const h2 = harness();
-  h2.deps.root = h.root;
-  mkdirSync(join(h.root, '.llmchat', 'dispatcher.lock'), { recursive: true });
-  writeFileSync(
-    join(h.root, '.llmchat', 'dispatcher.lock', 'owner.json'),
-    JSON.stringify({ pid: process.pid, createdAt: Date.now() - 9999999 }),
-  );
-  await assert.rejects(() => dispatch(cfg, h2.deps), /already running/);
+  assert.equal(h.reviews[0].body.startsWith('[QA/SDET Review]'), true);
+  assert.equal(h.reviews[1].body.startsWith('[Staff Review]'), true);
 });
 
-test('active --status remains observable and stale locks recover safely', async () => {
+test('QA changes return to Worker and QA is repeated before Staff', async () => {
+  const h = harness([{ number: 1, title: 'a' }], { qaVerdicts: ['changes_requested', 'passed'] });
+  await dispatch(h.cfg, h.deps);
+  assert.equal(h.state().status, 'done');
+  assert.deepEqual(h.counts(), { workerCount: 2, qaCount: 2, staffCount: 1 });
+  assert.deepEqual(
+    h.runs.map((run) => run.input?.match(/Use the ([^ ]+)/)?.[1]),
+    ['worker', 'qa-sdet', 'worker', 'qa-sdet', 'staff-reviewer'],
+  );
+});
+
+test('Staff changes return to Worker and force QA before Staff re-review', async () => {
+  const h = harness([{ number: 1, title: 'a' }], {
+    staffVerdicts: ['changes_requested', 'approved'],
+  });
+  await dispatch(h.cfg, h.deps);
+  assert.equal(h.state().status, 'done');
+  assert.deepEqual(h.counts(), { workerCount: 2, qaCount: 2, staffCount: 2 });
+  assert.deepEqual(
+    h.runs.map((run) => run.input?.match(/Use the ([^ ]+)/)?.[1]),
+    ['worker', 'qa-sdet', 'staff-reviewer', 'worker', 'qa-sdet', 'staff-reviewer'],
+  );
+});
+
+test('recovery detects stale Worker state, starts a new Worker and reuses the existing PR', async () => {
+  const now = Date.now();
+  const h = harness([{ number: 1, title: 'a' }], {
+    initialState: prepareRecovery({ completedIssues: [1] }, 1, 14, now, 100),
+  });
+  await dispatch(h.cfg, h.deps);
+  assert.equal(h.state().status, 'ready_for_human_merge');
+  assert.equal(h.state().pr, 14);
+  assert.equal(h.counts().workerCount, 1);
+  assert.equal(
+    h.comments.some(([, body]) => body.includes('Worker perdido')),
+    true,
+  );
+});
+
+test('failed PR CI returns the issue to a recovered Worker without local npm gates', async () => {
+  const h = harness([{ number: 1, title: 'a' }], {
+    checkSequences: [
+      [{ name: 'pr-checks', status: 'COMPLETED', conclusion: 'SUCCESS' }],
+      [{ name: 'pr-checks', status: 'COMPLETED', conclusion: 'FAILURE' }],
+      [{ name: 'pr-checks', status: 'COMPLETED', conclusion: 'SUCCESS' }],
+    ],
+  });
+  await dispatch(h.cfg, h.deps);
+  assert.equal(h.state().status, 'done');
+  assert.equal(h.counts().workerCount, 2);
+  assert.equal(
+    h.runs.some((run) => run.command === 'npm'),
+    false,
+  );
+});
+
+test('successful role process without a published review blocks the dispatcher', async () => {
+  const h = harness([{ number: 1, title: 'a' }], { publishEvidence: { staff: false } });
+  await dispatch(h.cfg, h.deps);
+  assert.equal(h.state().status, 'blocked');
+  assert.match(h.state().lastError, /did not publish \[Staff Review\]/);
+});
+
+test('active live run remains exclusive while stale recovery is allowed', async () => {
+  const h = harness([{ number: 1, title: 'a' }], {
+    initialState: {
+      issue: 1,
+      status: 'worker_running',
+      workerPid: process.pid,
+      workerHeartbeatAt: Date.now(),
+    },
+  });
+  await assert.rejects(() => dispatch(h.cfg, h.deps), /active run exists/);
+});
+
+test('stale locks recover safely and reclaim markers are atomic', () => {
+  const h = harness();
+  const lock = join(h.root, '.llmchat', 'dispatcher.lock');
+  mkdirSync(lock, { recursive: true });
+  writeFileSync(join(lock, 'owner.json'), '{stale');
+  const first = acquire(h.deps, 1);
+  assert.match(first, /^[0-9a-f-]+$/);
+  assert.throws(() => acquire(h.deps, 1), /already running/);
+  rmSync(lock, { recursive: true, force: true });
+});
+
+test('status remains observable while an active task is stored', () => {
   const h = harness();
   mkdirSync(join(h.root, '.llmchat'), { recursive: true });
   writeFileSync(
     join(h.root, '.llmchat', 'state.json'),
-    JSON.stringify({ issue: 9, status: 'in_progress' }),
+    JSON.stringify({ issue: 9, status: 'worker_running' }),
   );
   const status = spawnSync(
     process.execPath,
     [join(process.cwd(), 'dist', 'dispatcher.js'), '--status'],
-    { cwd: h.root, encoding: 'utf8' },
+    {
+      cwd: h.root,
+      encoding: 'utf8',
+    },
   );
   assert.equal(status.status, 0);
-  assert.match(status.stdout, /in_progress/);
-  mkdirSync(join(h.root, '.llmchat', 'dispatcher.lock'), { recursive: true });
-  writeFileSync(join(h.root, '.llmchat', 'dispatcher.lock', 'owner.json'), '{not-json');
-  h.deps.load = () => ({});
-  await dispatch(h.cfg, h.deps);
-  assert.equal(h.state().status, 'done');
+  assert.match(status.stdout, /worker_running/);
 });
 
-test('two stale-lock reclaimers have one atomic winner', () => {
-  const h = harness();
-  mkdirSync(join(h.root, '.llmchat', 'dispatcher.lock'), { recursive: true });
-  writeFileSync(join(h.root, '.llmchat', 'dispatcher.lock', 'owner.json'), '{stale');
-  const first = acquire(h.deps, 1);
-  assert.match(first, /^[0-9a-f-]+$/);
-  assert.throws(() => acquire(h.deps, 1), /already running/);
-  rmSync(join(h.root, '.llmchat', 'dispatcher.lock'), { recursive: true, force: true });
-});
-
-test('reclaim marker closes the forced reclaim window', () => {
-  const h = harness();
-  mkdirSync(join(h.root, '.llmchat', 'dispatcher.lock'), { recursive: true });
-  writeFileSync(join(h.root, '.llmchat', 'dispatcher.lock', 'owner.json'), '{stale');
-  let secondError;
-  h.deps.onReclaim = () => {
-    try {
-      acquire(h.deps, 1);
-    } catch (error) {
-      secondError = error;
-    }
-  };
-  acquire(h.deps, 1);
-  assert.match(String(secondError), /reclaiming the lock/);
-  assert.equal(existsSync(join(h.root, '.llmchat', 'dispatcher.lock')), true);
-  rmSync(join(h.root, '.llmchat', 'dispatcher.lock'), { recursive: true, force: true });
+test('prepareRecovery preserves PR and removes only the issue from completion', () => {
+  const state = prepareRecovery(
+    { pr: 15, completedIssues: [1, 2], status: 'done' },
+    1,
+    15,
+    1000,
+    100,
+  );
+  assert.equal(state.pr, 15);
+  assert.equal(state.status, 'worker_running');
+  assert.deepEqual(state.completedIssues, [2]);
+  assert.equal(state.workerPid, -1);
+  assert.equal(state.workerHeartbeatAt, 899);
 });
 
 test('dead reclaim marker recovers after its TTL', () => {

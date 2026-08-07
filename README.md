@@ -33,7 +33,9 @@ This repository contains the skeleton and the first end-to-end Gemini route. Ope
 
 The canonical specification is [issue #13](https://github.com/h-4vok/llmchat-cli/issues/13). Run the manual dispatcher with `npm run loop -- --list`, `npm run loop -- --status`, or `npm run loop`. Copy `loop.config.json.example` to `loop.config.json` to configure worker/review/QA commands. Local state is stored in `.llmchat/state.json` and is never committed.
 
-The flow is deliberately sequential: `Automation Ready` label → visible claim → worker → PR to `staging` → Staff/adversarial review → QA/SDET → smoke tests → ready for human merge. There is no automatic merge to `main`, no worktrees, and no parallelism. If staging is red, the dispatcher pauses; the Triage role must repair it and set `stagingGreen` in state before resuming.
+The flow is deliberately sequential: `Automation Ready` label → visible claim → Worker → PR CI → QA/SDET → Staff/adversarial review → ready for human merge. QA runs before Staff, and every Worker revision repeats QA before Staff. `npm test`, build, and format are PR checks in GitHub Actions; the dispatcher only polls their status. There is no automatic merge to `main`, no worktrees, and no parallelism.
+
+If the Worker process disappears, the dispatcher detects the stale lease, reconstructs context from local state and the existing PR, and starts a replacement Worker. To prepare a recovery test for an existing PR without changing its code, run `npm run loop -- --prepare-recovery 1 --pr <number>` and then run `npm run loop` normally.
 
 Roles and operating procedures: [`docs/loop-engineering-v1.md`](docs/loop-engineering-v1.md), [`docs/roles/`](docs/roles/).
 
