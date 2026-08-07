@@ -2,6 +2,7 @@
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir, platform } from 'node:os';
 import { dirname, join } from 'node:path';
+import { sendChat } from './provider.js';
 
 const SUPPORTED_PROVIDER = 'gemini';
 type Config = { schemaVersion: 1; defaultProvider?: string; [key: string]: unknown };
@@ -142,10 +143,12 @@ function main(): void {
       'No provider selected. Set a default with "llmchat config set-default-provider gemini" or pass "--provider gemini".',
     );
   validateProvider(provider);
-  const instructions = parsed.systemInstructions
-    ? ` using system instructions ${JSON.stringify(parsed.systemInstructions)}`
-    : '';
-  console.log(`Simulated response from ${provider}${instructions}: ${parsed.prompt}`);
+  console.log(
+    sendChat(provider, {
+      prompt: parsed.prompt,
+      systemInstructions: parsed.systemInstructions,
+    }),
+  );
 }
 
 try {
