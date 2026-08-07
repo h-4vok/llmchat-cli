@@ -313,7 +313,7 @@ export function runCommand(spec: Spec | undefined): Promise<string> {
   const attempt = (n: number): Promise<string> =>
     new Promise((resolve, reject) => {
       console.error(
-        `[loop] ejecutando (${n + 1}/${spec.retries + 1}): ${spec.command} ${spec.args.join(' ')}`,
+        `[sloop] ejecutando (${n + 1}/${spec.retries + 1}): ${spec.command} ${spec.args.join(' ')}`,
       );
       const child = spawn(launchExecutable, spec.args, {
         cwd: root,
@@ -399,10 +399,10 @@ function skillFor(status: Status | undefined): string {
 
 function status(d: Deps, issue: number, next: Status, extra: Partial<State> = {}): void {
   d.save({ ...d.load(), issue, status: next, updatedAt: d.now(), ...extra });
-  console.error(`[loop] issue #${issue}: ${next}`);
+  console.error(`[sloop] issue #${issue}: ${next}`);
   d.comment(
     issue,
-    `Loop engineering v2: estado ${next}. Skill activa: ${skillFor(next)}. QA precede a Staff; no se hace merge automático.`,
+    `Sloop engineering v2: estado ${next}. Skill activa: ${skillFor(next)}. QA precede a Staff; no se hace merge automático.`,
   );
 }
 
@@ -417,10 +417,10 @@ function claimNewIssue(d: Deps, issue: number): void {
     drainStatus: 'running',
     updatedAt: d.now(),
   });
-  console.error(`[loop] issue #${issue}: claimed`);
+  console.error(`[sloop] issue #${issue}: claimed`);
   d.comment(
     issue,
-    `Loop engineering v2: estado claimed. Skill activa: ${skillFor('claimed')}. QA precede a Staff; no se hace merge automÃ¡tico.`,
+    `Sloop engineering v2: estado claimed. Skill activa: ${skillFor('claimed')}. QA precede a Staff; no se hace merge automÃ¡tico.`,
   );
 }
 
@@ -593,7 +593,7 @@ async function waitForCi(
         `required PR checks did not finish before timeout: ${checkFeedback(checks, required)}`,
       );
     console.error(
-      `[loop] issue #${issue}: esperando checks del PR #${prNumber}: ${checkFeedback(checks, required)}`,
+      `[sloop] issue #${issue}: esperando checks del PR #${prNumber}: ${checkFeedback(checks, required)}`,
     );
     await (d.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms))))(
       cfg.checkPollIntervalMs ?? 5000,
@@ -754,7 +754,7 @@ async function runReview(
 
 function maxRounds(cfg: Config, round: number): void {
   if (round > (cfg.maxReviewRounds ?? 10))
-    throw new Error(`review loop exceeded maxReviewRounds=${cfg.maxReviewRounds ?? 10}`);
+    throw new Error(`review sloop exceeded maxReviewRounds=${cfg.maxReviewRounds ?? 10}`);
 }
 
 async function processIssue(cfg: Config, d: Deps, issue: Issue): Promise<void> {
@@ -845,7 +845,7 @@ async function processIssue(cfg: Config, d: Deps, issue: Issue): Promise<void> {
     });
     d.comment(
       issue.number,
-      '[Worker] loop gates passed; ready_for_human_merge, no merge performed.',
+      '[Worker] sloop gates passed; ready_for_human_merge, no merge performed.',
     );
     return;
   }
@@ -1049,7 +1049,7 @@ export async function dispatch(cfg: Config, d: Deps): Promise<void> {
         return;
       } catch (e) {
         const message = e instanceof Error ? e.message : String(e);
-        console.error(`[loop] issue #${issue.number} bloqueada: ${message}`);
+        console.error(`[sloop] issue #${issue.number} bloqueada: ${message}`);
         const current = d.load();
         const preserveRecovery =
           isWorkerStatus(current.status) ||
@@ -1079,8 +1079,8 @@ async function main() {
     console.log(JSON.stringify(readState(), null, 2));
     return;
   }
-  const cfg: Config = existsSync(join(root, 'loop.config.json'))
-    ? JSON.parse(readFileSync(join(root, 'loop.config.json'), 'utf8'))
+  const cfg: Config = existsSync(join(root, 'sloop.config.json'))
+    ? JSON.parse(readFileSync(join(root, 'sloop.config.json'), 'utf8'))
     : {};
   if (args.includes('--list')) {
     console.log(JSON.stringify(eligible(), null, 2));
@@ -1093,7 +1093,7 @@ async function main() {
   if (args.includes('--reset')) {
     const state = readState();
     writeState(resetRunState(state));
-    console.log('Estado local del loop reiniciado. Ejecutá npm run loop.');
+    console.log('Estado local del sloop reiniciado. Ejecutá npm run sloop.');
     return;
   }
   const recoveryIndex = args.indexOf('--prepare-recovery');
@@ -1106,7 +1106,7 @@ async function main() {
     if (!pr || !Number.isInteger(pr))
       throw new Error('--prepare-recovery requires --pr or an existing state.pr');
     writeState(prepareRecovery(readState(), issue, pr, Date.now(), cfg.workerLeaseMs ?? 900000));
-    console.log(`Recovery preparado para issue #${issue}, PR #${pr}. Ejecutá npm run loop.`);
+    console.log(`Recovery preparado para issue #${issue}, PR #${pr}. Ejecutá npm run sloop.`);
     return;
   }
   await dispatch(cfg, {

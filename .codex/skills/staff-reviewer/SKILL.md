@@ -1,6 +1,6 @@
 ---
 name: staff-reviewer
-description: Perform an independent adversarial review of an llmchat-cli PR for design flaws, security, regressions, boundaries, and abuse cases. Use before QA or when reviewing loop output.
+description: Perform an independent adversarial review of an llmchat-cli PR for design flaws, security, regressions, boundaries, and abuse cases. Use before QA or when reviewing sloop output.
 ---
 
 # staff-reviewer

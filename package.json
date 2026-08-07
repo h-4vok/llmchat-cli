@@ -12,7 +12,7 @@
     "start": "node dist/cli.js",
     "install:global": "npm run build && npm link",
     "uninstall:global": "npm unlink --global",
-    "loop": "node dist/dispatcher.js",
+    "sloop": "node dist/dispatcher.js",
     "format": "prettier --write .",
     "format:check": "prettier --check ."
   },

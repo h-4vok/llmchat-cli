@@ -1,6 +1,6 @@
 ---
 name: worker
-description: Implement one claimed llmchat-cli issue in the local checkout, open or update a PR targeting staging, and leave reproducible test evidence without merging. Use for loop work execution or manual implementation.
+description: Implement one claimed llmchat-cli issue in the local checkout, open or update a PR targeting staging, and leave reproducible test evidence without merging. Use for sloop work execution or manual implementation.
 ---
 
 # worker

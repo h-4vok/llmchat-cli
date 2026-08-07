@@ -39,18 +39,18 @@ Remove the global development link with `npm run uninstall:global`.
 
 This repository contains the skeleton and the first end-to-end Gemini route. Open decisions are tracked as GitHub issues.
 
-## Loop engineering v1
+## Sloop engineering v1
 
-The canonical specification is [issue #13](https://github.com/h-4vok/llmchat-cli/issues/13). Run the manual dispatcher with `npm run loop -- --list`, `npm run loop -- --status`, or `npm run loop`. Copy `loop.config.json.example` to `loop.config.json` to configure worker/review/QA commands. Local state is stored in `.llmchat/state.json` and is never committed.
+The canonical specification is [issue #13](https://github.com/h-4vok/llmchat-cli/issues/13). Run the manual dispatcher with `npm run sloop -- --list`, `npm run sloop -- --status`, or `npm run sloop`. Copy `sloop.config.json.example` to `sloop.config.json` to configure worker/review/QA commands. Local state is stored in `.llmchat/state.json` and is never committed.
 
 The flow is deliberately sequential: `Automation Ready` label → visible claim → Worker → PR CI → QA/SDET → Staff/adversarial review → ready for human merge. QA runs before Staff, and every Worker revision repeats QA before Staff. `npm test`, build, and format are PR checks in GitHub Actions; the dispatcher only polls their status. There is no automatic merge to `main`, no worktrees, and no parallelism.
 
-If the Worker process disappears, the dispatcher detects the stale lease, reconstructs context from local state and the existing PR, and starts a replacement Worker. To prepare a recovery test for an existing PR without changing its code, run `npm run loop -- --prepare-recovery 1 --pr <number>` and then run `npm run loop` normally.
+If the Worker process disappears, the dispatcher detects the stale lease, reconstructs context from local state and the existing PR, and starts a replacement Worker. To prepare a recovery test for an existing PR without changing its code, run `npm run sloop -- --prepare-recovery 1 --pr <number>` and then run `npm run sloop` normally.
 
-For new work, the dispatcher fetches `origin/staging` and prepares the deterministic branch `codex/issue-<number>` from that exact remote SHA before starting the Worker. It persists the branch and `stagingBaseSha` in loop state. Recovery reuses the persisted branch/PR and does not prepare a new branch. Worker PRs must target `staging`; another base is rejected.
+For new work, the dispatcher fetches `origin/staging` and prepares the deterministic branch `codex/issue-<number>` from that exact remote SHA before starting the Worker. It persists the branch and `stagingBaseSha` in sloop state. Recovery reuses the persisted branch/PR and does not prepare a new branch. Worker PRs must target `staging`; another base is rejected.
 
-Roles and operating procedures: [`docs/loop-engineering-v1.md`](docs/loop-engineering-v1.md), [`docs/roles/`](docs/roles/).
+Roles and operating procedures: [`docs/sloop-engineering-v1.md`](docs/sloop-engineering-v1.md), [`docs/roles/`](docs/roles/).
 
 ## Reusable skills
 
-Codex discovers the loop skills in [`.codex/skills/`](.codex/skills/). Invoke them manually by name (`product-lead`, `dispatcher`, `worker`, `staff-reviewer`, `qa-sdet`, `triage-staging`), or let the dispatcher record the active skill at each transition. Each skill defines its entry conditions, outputs, state, and merge boundaries; the documents in `docs/roles/` retain only general operating context.
+Codex discovers the sloop skills in [`.codex/skills/`](.codex/skills/). Invoke them manually by name (`product-lead`, `dispatcher`, `worker`, `staff-reviewer`, `qa-sdet`, `triage-staging`), or let the dispatcher record the active skill at each transition. Each skill defines its entry conditions, outputs, state, and merge boundaries; the documents in `docs/roles/` retain only general operating context.
