@@ -259,19 +259,49 @@ test('Staff changes return to Worker and force QA before Staff re-review', async
 test('recovery detects stale Worker state, starts a new Worker and reuses the existing PR', async () => {
   const now = Date.now();
   const h = harness([{ number: 1, title: 'a' }], {
-    initialState: prepareRecovery({ completedIssues: [1] }, 1, 14, now, 100),
+    initialState: prepareRecovery(
+      { completedIssues: [1], branch: 'codex/issue-1' },
+      1,
+      14,
+      now,
+      100,
+    ),
   });
   h.deps.prepareWorkerBranch = () => {
     throw new Error('recovery must reuse the existing branch');
   };
+  let checkedOut;
+  h.deps.checkoutWorkerBranch = (branch) => {
+    checkedOut = branch;
+  };
   await dispatch(h.cfg, h.deps);
   assert.equal(h.state().status, 'ready_for_human_merge');
   assert.equal(h.state().pr, 14);
+  assert.equal(checkedOut, 'codex/issue-1');
   assert.equal(h.counts().workerCount, 1);
   assert.equal(
     h.comments.some(([, body]) => body.includes('Worker perdido')),
     true,
   );
+});
+
+test('new branch preparation failure is persisted and does not leave a claimed run stuck', async () => {
+  const h = harness([{ number: 1, title: 'a' }]);
+  h.deps.prepareWorkerBranch = () => {
+    throw new Error('fetch failed');
+  };
+  await dispatch(h.cfg, h.deps);
+  assert.equal(h.state().status, 'blocked');
+  assert.equal(h.state().lastError, 'fetch failed');
+});
+
+test('recovery rejects a non-deterministic persisted branch', async () => {
+  const h = harness([{ number: 1, title: 'a' }], {
+    initialState: prepareRecovery({ completedIssues: [1], branch: 'main' }, 1, 14, Date.now(), 100),
+  });
+  await dispatch(h.cfg, h.deps);
+  assert.equal(h.state().status, 'worker_recovery_pending');
+  assert.match(h.state().lastError, /recovery requires persisted worker branch codex\/issue-1/);
 });
 
 test('conflicting Worker PR is rejected before reviews', async () => {

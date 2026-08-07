@@ -116,6 +116,7 @@ type Deps = {
   sleep?: (ms: number) => Promise<void>;
   onReclaim?: () => void;
   prepareWorkerBranch?: (issue: number) => { branch: string; stagingBaseSha: string };
+  checkoutWorkerBranch?: (branch: string) => void;
 };
 type Spec = {
   command: string;
@@ -918,6 +919,10 @@ export function prepareWorkerBranch(
   return { branch, stagingBaseSha };
 }
 
+export function checkoutWorkerBranch(branch: string, cwd = root): void {
+  execFileSync('git', ['checkout', branch], { cwd, stdio: 'inherit' });
+}
+
 export function resetRunState(state: State, processAlive = defaultProcessAlive): State {
   if (isActiveStatus(state.status) && state.workerPid && processAlive(state.workerPid))
     throw new Error(`cannot reset while Worker process ${state.workerPid} is still running`);
@@ -1013,28 +1018,35 @@ export async function dispatch(cfg: Config, d: Deps): Promise<void> {
         return;
       }
       processed.add(issue.number);
-      if (recovery) {
-        status(d, issue.number, 'worker_recovery_pending', {
-          pr: d.load().pr,
-          workerRecoveryCount: d.load().workerRecoveryCount ?? 0,
-        });
-        d.comment(
-          issue.number,
-          'Dispatcher detectó un Worker perdido y levantará una ejecución de recovery.',
-        );
-      } else {
-        status(d, issue.number, 'claimed', { pr: d.load().pr });
-        d.comment(issue.number, 'Dispatcher reclama esta issue de forma exclusiva.');
-        const prepared = (d.prepareWorkerBranch ?? ((number) => prepareWorkerBranch(number)))(
-          issue.number,
-        );
-        d.save({
-          ...d.load(),
-          branch: prepared.branch,
-          stagingBaseSha: prepared.stagingBaseSha,
-        });
-      }
       try {
+        if (recovery) {
+          const persisted = d.load().branch;
+          const expected = workerBranchName(issue.number);
+          if (persisted !== expected)
+            throw new Error(
+              `recovery requires persisted worker branch ${expected}; found ${persisted ?? 'none'}`,
+            );
+          (d.checkoutWorkerBranch ?? ((branch) => checkoutWorkerBranch(branch, d.root)))(persisted);
+          status(d, issue.number, 'worker_recovery_pending', {
+            pr: d.load().pr,
+            workerRecoveryCount: d.load().workerRecoveryCount ?? 0,
+          });
+          d.comment(
+            issue.number,
+            'Dispatcher detectó un Worker perdido y levantará una ejecución de recovery.',
+          );
+        } else {
+          status(d, issue.number, 'claimed', { pr: d.load().pr });
+          d.comment(issue.number, 'Dispatcher reclama esta issue de forma exclusiva.');
+          const prepared = (d.prepareWorkerBranch ?? ((number) => prepareWorkerBranch(number)))(
+            issue.number,
+          );
+          d.save({
+            ...d.load(),
+            branch: prepared.branch,
+            stagingBaseSha: prepared.stagingBaseSha,
+          });
+        }
         await processIssue(cfg, d, issue);
         // Temporarily process exactly one issue per invocation. This prevents
         // state from one completed issue leaking into the next issue while the
