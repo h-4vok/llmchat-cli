@@ -47,6 +47,8 @@ The flow is deliberately sequential: `Automation Ready` label → visible claim 
 
 If the Worker process disappears, the dispatcher detects the stale lease, reconstructs context from local state and the existing PR, and starts a replacement Worker. To prepare a recovery test for an existing PR without changing its code, run `npm run loop -- --prepare-recovery 1 --pr <number>` and then run `npm run loop` normally.
 
+For new work, the dispatcher fetches `origin/staging` and prepares the deterministic branch `codex/issue-<number>` from that exact remote SHA before starting the Worker. It persists the branch and `stagingBaseSha` in loop state. Recovery reuses the persisted branch/PR and does not prepare a new branch. Worker PRs must target `staging`; another base is rejected.
+
 Roles and operating procedures: [`docs/loop-engineering-v1.md`](docs/loop-engineering-v1.md), [`docs/roles/`](docs/roles/).
 
 ## Reusable skills

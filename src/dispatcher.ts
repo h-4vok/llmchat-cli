@@ -37,6 +37,7 @@ export type State = {
   status?: Status;
   pr?: number;
   branch?: string;
+  stagingBaseSha?: string;
   headSha?: string;
   reviewRound?: number;
   attempt?: number;
@@ -114,6 +115,8 @@ type Deps = {
   processAlive?: (pid: number) => boolean;
   sleep?: (ms: number) => Promise<void>;
   onReclaim?: () => void;
+  prepareWorkerBranch?: (issue: number) => { branch: string; stagingBaseSha: string };
+  checkoutWorkerBranch?: (branch: string) => void;
 };
 type Spec = {
   command: string;
@@ -663,6 +666,8 @@ async function runWorker(
   context: string,
   feedback: string,
 ): Promise<number> {
+  if (cfg.baseBranch !== undefined && cfg.baseBranch !== 'staging')
+    throw new Error(`Worker PR baseBranch must be staging; found ${cfg.baseBranch}`);
   if (!cfg.workerCommand) throw new Error('workerCommand is required');
   const runId = randomUUID();
   status(d, issue.number, 'worker_recovery_pending', {
@@ -698,6 +703,11 @@ async function runWorker(
     );
   if (evidence.baseRefName !== (cfg.baseBranch ?? 'staging'))
     throw new Error(`PR #${metadata.pr} must target ${cfg.baseBranch ?? 'staging'}`);
+  const expectedWorkerBranch = workerBranchName(issue.number);
+  if (evidence.headRefName !== expectedWorkerBranch)
+    throw new Error(
+      `PR #${metadata.pr} must use worker branch ${expectedWorkerBranch}; found ${evidence.headRefName}`,
+    );
   if (
     evidence.mergeable?.toUpperCase() === 'CONFLICTING' ||
     evidence.mergeStateStatus?.toUpperCase() === 'DIRTY'
@@ -708,14 +718,14 @@ async function runWorker(
   d.save({
     ...d.load(),
     pr: metadata.pr,
-    branch: evidence.headRefName,
+    branch: d.load().branch ?? evidence.headRefName,
     headSha: evidence.headRefOid,
     workerPid: undefined,
     workerHeartbeatAt: d.now(),
   });
   status(d, issue.number, 'worker_ready_for_review', {
     pr: metadata.pr,
-    branch: evidence.headRefName,
+    branch: d.load().branch ?? evidence.headRefName,
     headSha: evidence.headRefOid,
   });
   return metadata.pr;
@@ -845,8 +855,8 @@ async function processIssue(cfg: Config, d: Deps, issue: Issue): Promise<void> {
       headSha: evidence.headRefOid,
       lastStaffFeedback: staff.body,
     });
-    status(d, issue.number, 'ready_for_human_merge', { pr, headSha: evidence.headRefOid });
     publishHumanReviewGuide(d, evidence, round);
+    status(d, issue.number, 'ready_for_human_merge', { pr, headSha: evidence.headRefOid });
     d.save({
       ...d.load(),
       completedIssues: [...new Set([...(d.load().completedIssues ?? []), issue.number])],
@@ -887,6 +897,49 @@ export function prepareRecovery(
     lastStaffFeedback: undefined,
     drainStatus: 'running',
     updatedAt: now,
+  };
+}
+
+export function workerBranchName(issue: number): string {
+  if (!Number.isInteger(issue) || issue <= 0) throw new Error('issue number must be positive');
+  return `codex/issue-${issue}`;
+}
+
+export function prepareWorkerBranch(
+  issue: number,
+  cwd = root,
+): { branch: string; stagingBaseSha: string } {
+  const branch = workerBranchName(issue);
+  execFileSync('git', ['fetch', 'origin', 'staging'], { cwd, stdio: 'inherit' });
+  const stagingBaseSha = execFileSync('git', ['rev-parse', 'origin/staging'], {
+    cwd,
+    encoding: 'utf8',
+  }).trim();
+  try {
+    execFileSync('git', ['show-ref', '--verify', '--quiet', `refs/heads/${branch}`], {
+      cwd,
+      stdio: 'ignore',
+    });
+    throw new Error(`worker branch ${branch} already exists; refusing to overwrite it`);
+  } catch (error) {
+    if (error instanceof Error && error.message.includes('already exists')) throw error;
+  }
+  execFileSync('git', ['checkout', '-B', branch, 'origin/staging'], { cwd, stdio: 'inherit' });
+  return { branch, stagingBaseSha };
+}
+
+export function checkoutWorkerBranch(branch: string, cwd = root): void {
+  execFileSync('git', ['checkout', branch], { cwd, stdio: 'inherit' });
+}
+
+export function resetRunState(state: State, processAlive = defaultProcessAlive): State {
+  if (isActiveStatus(state.status) && state.workerPid && processAlive(state.workerPid))
+    throw new Error(`cannot reset while Worker process ${state.workerPid} is still running`);
+  return {
+    completedIssues: state.completedIssues ?? [],
+    stagingGreen: state.stagingGreen,
+    drainStatus: 'running',
+    updatedAt: Date.now(),
   };
 }
 
@@ -951,6 +1004,8 @@ export function acquire(d: Deps, ttl: number): string {
 }
 
 export async function dispatch(cfg: Config, d: Deps): Promise<void> {
+  if (cfg.baseBranch !== undefined && cfg.baseBranch !== 'staging')
+    throw new Error(`Worker PR baseBranch must be staging; found ${cfg.baseBranch}`);
   const initial = d.load();
   const recovery = initial.status === 'worker_recovery_pending' || isStaleWorker(initial, cfg, d);
   if (isActiveStatus(initial.status) && !recovery)
@@ -972,20 +1027,35 @@ export async function dispatch(cfg: Config, d: Deps): Promise<void> {
         return;
       }
       processed.add(issue.number);
-      if (recovery) {
-        status(d, issue.number, 'worker_recovery_pending', {
-          pr: d.load().pr,
-          workerRecoveryCount: d.load().workerRecoveryCount ?? 0,
-        });
-        d.comment(
-          issue.number,
-          'Dispatcher detectó un Worker perdido y levantará una ejecución de recovery.',
-        );
-      } else {
-        status(d, issue.number, 'claimed', { pr: d.load().pr });
-        d.comment(issue.number, 'Dispatcher reclama esta issue de forma exclusiva.');
-      }
       try {
+        if (recovery) {
+          const persisted = d.load().branch;
+          const expected = workerBranchName(issue.number);
+          if (persisted !== expected)
+            throw new Error(
+              `recovery requires persisted worker branch ${expected}; found ${persisted ?? 'none'}`,
+            );
+          (d.checkoutWorkerBranch ?? ((branch) => checkoutWorkerBranch(branch, d.root)))(persisted);
+          status(d, issue.number, 'worker_recovery_pending', {
+            pr: d.load().pr,
+            workerRecoveryCount: d.load().workerRecoveryCount ?? 0,
+          });
+          d.comment(
+            issue.number,
+            'Dispatcher detectó un Worker perdido y levantará una ejecución de recovery.',
+          );
+        } else {
+          status(d, issue.number, 'claimed', { pr: d.load().pr });
+          d.comment(issue.number, 'Dispatcher reclama esta issue de forma exclusiva.');
+          const prepared = (d.prepareWorkerBranch ?? ((number) => prepareWorkerBranch(number)))(
+            issue.number,
+          );
+          d.save({
+            ...d.load(),
+            branch: prepared.branch,
+            stagingBaseSha: prepared.stagingBaseSha,
+          });
+        }
         await processIssue(cfg, d, issue);
         // Temporarily process exactly one issue per invocation. This prevents
         // state from one completed issue leaking into the next issue while the
@@ -1026,6 +1096,12 @@ async function main() {
     : {};
   if (args.includes('--list')) {
     console.log(JSON.stringify(eligible(), null, 2));
+    return;
+  }
+  if (args.includes('--reset')) {
+    const state = readState();
+    writeState(resetRunState(state));
+    console.log('Estado local del loop reiniciado. Ejecutá npm run loop.');
     return;
   }
   const recoveryIndex = args.indexOf('--prepare-recovery');

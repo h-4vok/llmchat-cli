@@ -9,7 +9,10 @@ import {
   command,
   dispatcherLockPath,
   dispatch,
+  prepareWorkerBranch,
   prepareRecovery,
+  workerBranchName,
+  resetRunState,
   runCommand,
 } from '../dist/dispatcher.js';
 
@@ -40,7 +43,7 @@ function harness(
     number: 14,
     state: 'OPEN',
     baseRefName: 'staging',
-    headRefName: 'codex/test',
+    headRefName: overrides.headRefName ?? 'codex/issue-1',
     headRefOid: 'abc0',
     mergeStateStatus: 'CLEAN',
     mergeable: 'MERGEABLE',
@@ -91,8 +94,9 @@ function harness(
             body: `[Worker] round=${round} status=ready_for_review pr=${pr.number} base=staging commit=${pr.headRefOid}`,
             createdAt: `${workerCount}`,
           });
-        pr.comments.at(-1).body +=
-          `\n\n[Human Verification]\n\`\`\`json\n${JSON.stringify({ summary: 'Exercise the CLI change.', steps: ['Run the focused command.'], expected: ['The documented output appears.'], isolation: 'Use a temporary checkout and no credentials.', limitations: ['A failed command indicates the change is not ready.'], checklist: ['Behavior matches the acceptance criteria.'] })}\n\`\`\``;
+        if (overrides.workerGuide !== false)
+          pr.comments.at(-1).body +=
+            `\n\n[Human Verification]\n\`\`\`json\n${JSON.stringify({ summary: 'Exercise the CLI change.', steps: ['Run the focused command.'], expected: ['The documented output appears.'], isolation: 'Use a temporary checkout and no credentials.', limitations: ['A failed command indicates the change is not ready.'], checklist: ['Behavior matches the acceptance criteria.'] })}\n\`\`\``;
         return `WORKER_RESULT pr=${pr.number} base=staging`;
       }
       if (role === 'qa') {
@@ -127,6 +131,10 @@ function harness(
     pid: () => process.pid,
     processAlive: (pid) => pid > 0 && pid !== -1,
     sleep: async () => {},
+    prepareWorkerBranch: (issue) => ({
+      branch: workerBranchName(issue),
+      stagingBaseSha: 'staging-sha-1',
+    }),
   };
 
   return {
@@ -186,6 +194,100 @@ test('dispatcher runs Worker, QA, then Staff and uses PR evidence instead of JSO
     h.comments.some(([, body]) => body.startsWith('[Human Review Guide]')),
     true,
   );
+  assert.equal(h.state().branch, 'codex/issue-1');
+  assert.equal(h.state().stagingBaseSha, 'staging-sha-1');
+});
+
+test('worker branch convention is deterministic and rejects invalid issue numbers', () => {
+  assert.equal(workerBranchName(16), 'codex/issue-16');
+  assert.throws(() => workerBranchName(0), /issue number must be positive/);
+});
+
+test('new branch preparation refuses to overwrite an existing worker branch', () => {
+  const root = mkdtempSync(join(tmpdir(), 'llmchat-git-'));
+  const remote = mkdtempSync(join(tmpdir(), 'llmchat-remote-'));
+  const runGit = (args) => {
+    const result = spawnSync('git', args, { cwd: root, encoding: 'utf8' });
+    assert.equal(result.status, 0, result.stderr);
+    return result.stdout.trim();
+  };
+  runGit(['init', '-b', 'staging']);
+  runGit(['config', 'user.email', 'test@example.com']);
+  runGit(['config', 'user.name', 'Test']);
+  writeFileSync(join(root, 'README.md'), 'staging');
+  runGit(['add', 'README.md']);
+  runGit(['commit', '-m', 'initial']);
+  const remoteResult = spawnSync('git', ['init', '--bare', remote], { encoding: 'utf8' });
+  assert.equal(remoteResult.status, 0, remoteResult.stderr);
+  runGit(['remote', 'add', 'origin', remote]);
+  runGit(['push', 'origin', 'staging']);
+  runGit(['branch', 'codex/issue-1']);
+  assert.throws(
+    () => prepareWorkerBranch(1, root),
+    /worker branch codex\/issue-1 already exists; refusing to overwrite it/,
+  );
+  assert.equal(runGit(['rev-parse', 'codex/issue-1']), runGit(['rev-parse', 'HEAD']));
+  rmSync(root, { recursive: true, force: true });
+  rmSync(remote, { recursive: true, force: true });
+});
+
+test('new branch preparation uses staging updated by fetch', () => {
+  const seed = mkdtempSync(join(tmpdir(), 'llmchat-seed-'));
+  const remote = mkdtempSync(join(tmpdir(), 'llmchat-remote-'));
+  const work = mkdtempSync(join(tmpdir(), 'llmchat-work-'));
+  const runGit = (cwd, args) => {
+    const result = spawnSync('git', args, { cwd, encoding: 'utf8' });
+    assert.equal(result.status, 0, result.stderr);
+    return result.stdout.trim();
+  };
+  try {
+    runGit(seed, ['init', '-b', 'staging']);
+    runGit(seed, ['config', 'user.email', 'test@example.com']);
+    runGit(seed, ['config', 'user.name', 'Test']);
+    writeFileSync(join(seed, 'README.md'), 'initial');
+    runGit(seed, ['add', 'README.md']);
+    runGit(seed, ['commit', '-m', 'initial']);
+    const remoteResult = spawnSync('git', ['init', '--bare', remote], { encoding: 'utf8' });
+    assert.equal(remoteResult.status, 0, remoteResult.stderr);
+    runGit(seed, ['remote', 'add', 'origin', remote]);
+    runGit(seed, ['push', 'origin', 'staging']);
+    runGit(work, ['clone', remote, '.']);
+    writeFileSync(join(seed, 'README.md'), 'updated staging');
+    runGit(seed, ['add', 'README.md']);
+    runGit(seed, ['commit', '-m', 'advance staging']);
+    const updatedStagingSha = runGit(seed, ['rev-parse', 'HEAD']);
+    runGit(seed, ['push', 'origin', 'staging']);
+
+    const prepared = prepareWorkerBranch(16, work);
+
+    assert.equal(prepared.branch, 'codex/issue-16');
+    assert.equal(prepared.stagingBaseSha, updatedStagingSha);
+    assert.equal(runGit(work, ['rev-parse', 'codex/issue-16']), updatedStagingSha);
+  } finally {
+    rmSync(seed, { recursive: true, force: true });
+    rmSync(remote, { recursive: true, force: true });
+    rmSync(work, { recursive: true, force: true });
+  }
+});
+
+test('dispatcher rejects a PR whose worker branch violates the convention', async () => {
+  const h = harness([{ number: 1, title: 'branch validation' }], {
+    headRefName: 'codex/other-branch',
+  });
+  await dispatch(h.cfg, h.deps);
+  assert.match(
+    h.state().lastError,
+    /must use worker branch codex\/issue-1; found codex\/other-branch/,
+  );
+});
+
+test('dispatcher rejects a configurable non-staging PR base explicitly', async () => {
+  const h = harness();
+  await assert.rejects(
+    () => dispatch({ ...h.cfg, baseBranch: 'main' }, h.deps),
+    /Worker PR baseBranch must be staging; found main/,
+  );
+  assert.equal(h.runs.length, 0);
 });
 
 test('dispatcher stops after one issue instead of draining the queue', async () => {
@@ -197,6 +299,13 @@ test('dispatcher stops after one issue instead of draining the queue', async () 
   assert.equal(h.state().status, 'ready_for_human_merge');
   assert.deepEqual(h.counts(), { workerCount: 1, qaCount: 1, staffCount: 1 });
   assert.deepEqual(h.state().completedIssues, [1]);
+});
+
+test('missing human guide never announces ready_for_human_merge', async () => {
+  const h = harness([{ number: 1, title: 'first' }], { workerGuide: false });
+  await dispatch(h.cfg, h.deps);
+  assert.equal(h.state().status, 'blocked');
+  assert.match(h.state().lastError, /complete \[Human Verification\] guide/);
 });
 
 test('QA changes return to Worker and QA is repeated before Staff', async () => {
@@ -226,16 +335,49 @@ test('Staff changes return to Worker and force QA before Staff re-review', async
 test('recovery detects stale Worker state, starts a new Worker and reuses the existing PR', async () => {
   const now = Date.now();
   const h = harness([{ number: 1, title: 'a' }], {
-    initialState: prepareRecovery({ completedIssues: [1] }, 1, 14, now, 100),
+    initialState: prepareRecovery(
+      { completedIssues: [1], branch: 'codex/issue-1' },
+      1,
+      14,
+      now,
+      100,
+    ),
   });
+  h.deps.prepareWorkerBranch = () => {
+    throw new Error('recovery must reuse the existing branch');
+  };
+  let checkedOut;
+  h.deps.checkoutWorkerBranch = (branch) => {
+    checkedOut = branch;
+  };
   await dispatch(h.cfg, h.deps);
   assert.equal(h.state().status, 'ready_for_human_merge');
   assert.equal(h.state().pr, 14);
+  assert.equal(checkedOut, 'codex/issue-1');
   assert.equal(h.counts().workerCount, 1);
   assert.equal(
     h.comments.some(([, body]) => body.includes('Worker perdido')),
     true,
   );
+});
+
+test('new branch preparation failure is persisted and does not leave a claimed run stuck', async () => {
+  const h = harness([{ number: 1, title: 'a' }]);
+  h.deps.prepareWorkerBranch = () => {
+    throw new Error('fetch failed');
+  };
+  await dispatch(h.cfg, h.deps);
+  assert.equal(h.state().status, 'blocked');
+  assert.equal(h.state().lastError, 'fetch failed');
+});
+
+test('recovery rejects a non-deterministic persisted branch', async () => {
+  const h = harness([{ number: 1, title: 'a' }], {
+    initialState: prepareRecovery({ completedIssues: [1], branch: 'main' }, 1, 14, Date.now(), 100),
+  });
+  await dispatch(h.cfg, h.deps);
+  assert.equal(h.state().status, 'worker_recovery_pending');
+  assert.match(h.state().lastError, /recovery requires persisted worker branch codex\/issue-1/);
 });
 
 test('conflicting Worker PR is rejected before reviews', async () => {
@@ -244,7 +386,7 @@ test('conflicting Worker PR is rejected before reviews', async () => {
     number: 14,
     state: 'OPEN',
     baseRefName: 'staging',
-    headRefName: 'codex/test',
+    headRefName: 'codex/issue-1',
     headRefOid: 'abc1',
     mergeStateStatus: 'DIRTY',
     mergeable: 'CONFLICTING',
@@ -337,6 +479,35 @@ test('prepareRecovery preserves PR and removes only the issue from completion', 
   assert.deepEqual(state.completedIssues, [2]);
   assert.equal(state.workerPid, -1);
   assert.equal(state.workerHeartbeatAt, 899);
+});
+
+test('resetRunState clears stale run context and preserves completed issues', () => {
+  const state = resetRunState(
+    {
+      issue: 21,
+      pr: 20,
+      branch: 'codex/issue-3',
+      status: 'worker_recovery_pending',
+      workerPid: -1,
+      completedIssues: [1, 2, 3],
+      stagingGreen: true,
+      lastError: 'stale worker',
+    },
+    () => false,
+  );
+  assert.deepEqual(state.completedIssues, [1, 2, 3]);
+  assert.equal(state.status, undefined);
+  assert.equal(state.pr, undefined);
+  assert.equal(state.branch, undefined);
+  assert.equal(state.lastError, undefined);
+  assert.equal(state.drainStatus, 'running');
+});
+
+test('resetRunState refuses a live Worker', () => {
+  assert.throws(
+    () => resetRunState({ status: 'worker_running', workerPid: 123 }, () => true),
+    /cannot reset while Worker process 123 is still running/,
+  );
 });
 
 test('dead reclaim marker recovers after its TTL', () => {
