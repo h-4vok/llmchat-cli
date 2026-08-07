@@ -564,7 +564,7 @@ function rolePrompt(
 ): string {
   const issueContext = issue.body?.trim() || '(issue body unavailable; inspect it with gh)';
   if (role === 'worker')
-    return `Use the worker skill for GitHub issue #${issue.number}: ${issue.title}. This is dispatcher recovery run ${runId}, review round ${round}. Continue the existing task in the current checkout. ${pr ? `An existing PR is #${pr}; update that PR and never create a second PR.` : 'Create exactly one PR targeting staging if one does not exist.'} Do not merge. The claimed issue number is ${issue.number} (also in LLMCHAT_ISSUE_NUMBER). The dispatcher has generated the initial PR body in LLMCHAT_PR_BODY: ${JSON.stringify(initialPrBody ?? '')}. If creating a PR, pass that exact value to gh pr create using --body-file (or an equivalent file-based body argument); do not construct the closing reference yourself. When updating the PR, preserve every state-authorized closing reference supplied in the recovery context exactly once; do not add or remove other issue links without dispatcher instruction. Use gh pr create/edit (or equivalent) to persist that body. Inspect the issue, current PR diff, CI checks, mergeability, and all [QA/SDET Review] and [Staff Review] feedback. If the PR is CONFLICTING or DIRTY against staging, update the branch from staging, resolve every conflict, run the required checks, and do not report ready_for_review until the PR is clean and mergeable. Resolve every actionable finding and publish one PR conversation comment beginning with [Worker], including round=${round}, status=ready_for_review, pr=<number>, base=staging, and commit=<current head SHA>. The dispatcher will verify that comment and the PR mergeability on GitHub. Never delete or modify .llmchat/state.json or dispatcher runtime state. Exit 0 only after the work, conflict resolution, and comment are complete; do not return JSON. Issue body:\n${issueContext}\n${context ? `Recovered context:\n${context}\n` : ''}${feedback ? `Actionable feedback to resolve:\n${feedback}\n` : ''}At the end, print a plain-text line exactly like WORKER_RESULT pr=<number> base=staging. All command success/failure is communicated by the process exit code.`;
+    return `Use the worker skill for GitHub issue #${issue.number}: ${issue.title}. This is dispatcher recovery run ${runId}, review round ${round}. Continue the existing task in the current checkout. ${pr ? `An existing PR is #${pr}; update that PR and never create a second PR.` : 'Create exactly one PR targeting staging if one does not exist.'} Do not merge. The claimed issue number is ${issue.number} (also in LLMCHAT_ISSUE_NUMBER). The dispatcher has generated the initial PR body in LLMCHAT_PR_BODY: ${JSON.stringify(initialPrBody ?? '')}. If creating a PR, pass that exact value to gh pr create using --body-file (or an equivalent file-based body argument); do not construct the closing reference yourself. When updating the PR, preserve every state-authorized closing reference supplied in the recovery context exactly once; do not add or remove other issue links without dispatcher instruction. Use gh pr create/edit (or equivalent) to persist that body. Inspect the issue, current PR diff, CI checks, mergeability, and all [QA/SDET Review] and [Staff Review] feedback. If the PR is CONFLICTING or DIRTY against staging, update the branch from staging, resolve every conflict, run the required checks, and do not report ready_for_review until the PR is clean and mergeable. Resolve every actionable finding and publish one PR conversation comment beginning with [Worker], including round=${round}, status=ready_for_review, pr=<number>, base=staging, and commit=<current head SHA>. In that evidence include a [Human Verification] JSON code block with non-empty summary, steps, expected, isolation, limitations, and checklist fields. Make the steps concrete, safe, and isolated; state diagnostics for failures; do not claim automated checks that were not run. The dispatcher will validate and publish the guide only after CI, QA, and Staff pass. Never delete or modify .llmchat/state.json or dispatcher runtime state. Exit 0 only after the work, conflict resolution, and comment are complete; do not return JSON. Issue body:\n${issueContext}\n${context ? `Recovered context:\n${context}\n` : ''}${feedback ? `Actionable feedback to resolve:\n${feedback}\n` : ''}At the end, print a plain-text line exactly like WORKER_RESULT pr=<number> base=staging. All command success/failure is communicated by the process exit code.`;
   if (role === 'qa')
     return `Use the qa-sdet skill for GitHub issue #${issue.number}: ${issue.title}. Review PR #${pr} against staging before Staff. Current head is ${headSha ?? 'unknown'} and this is review round ${round}. Inspect the acceptance criteria, diff, CI check results, regression coverage, and smoke evidence. Publish directly to the PR exactly one review beginning [QA/SDET Review] round=${round} verdict=passed, changes_requested, or blocked. Include Q<n> findings, exact evidence, and commit=${headSha ?? 'current'}. Do not edit code or merge. Exit 0 after publishing the review; do not return JSON. Issue body:\n${issueContext}`;
   return `Use the staff-reviewer skill for GitHub issue #${issue.number}: ${issue.title}. Review PR #${pr} against staging after QA has passed. Current head is ${headSha ?? 'unknown'} and this is review round ${round}. Perform the independent adversarial review for design, security, regressions, boundaries, and abuse cases. Publish directly to the PR exactly one review beginning [Staff Review] round=${round} verdict=approved or changes_requested, include S<n> findings when needed, and include commit=${headSha ?? 'current'}. Do not edit code or merge. Exit 0 after publishing the review; do not return JSON. Issue body:\n${issueContext}`;
@@ -615,6 +615,66 @@ function latestWorkerComment(pr: PullRequest, round: number, headSha?: string) {
     )
     .sort((a, b) => String(a.createdAt).localeCompare(String(b.createdAt)))
     .at(-1);
+}
+
+type HumanReviewGuide = {
+  summary: string;
+  steps: string[];
+  expected: string[];
+  isolation: string;
+  limitations: string[];
+  checklist: string[];
+};
+
+function humanReviewGuide(comment: { body?: string } | undefined): HumanReviewGuide | undefined {
+  const match = comment?.body?.match(/\[Human Verification\]\s*```json\s*([\s\S]*?)```/i);
+  if (!match) return undefined;
+  try {
+    const guide = JSON.parse(match[1]) as Partial<HumanReviewGuide>;
+    const strings = (value: unknown) =>
+      Array.isArray(value) &&
+      value.length > 0 &&
+      value.every((item) => typeof item === 'string' && item.trim());
+    if (
+      typeof guide.summary !== 'string' ||
+      !guide.summary.trim() ||
+      !strings(guide.steps) ||
+      !strings(guide.expected) ||
+      typeof guide.isolation !== 'string' ||
+      !guide.isolation.trim() ||
+      !strings(guide.limitations) ||
+      !strings(guide.checklist)
+    )
+      return undefined;
+    return guide as HumanReviewGuide;
+  } catch {
+    return undefined;
+  }
+}
+
+function publishHumanReviewGuide(d: Deps, pr: PullRequest, round: number): void {
+  const guide = humanReviewGuide(latestWorkerComment(pr, round, pr.headRefOid));
+  if (!guide || !pr.headRefOid)
+    throw new Error('Worker evidence must contain a complete [Human Verification] guide');
+  const commit = pr.headRefOid;
+  if (
+    (pr.comments ?? []).some(
+      (comment) =>
+        comment.body?.trim().startsWith('[Human Review Guide]') &&
+        comment.body?.match(/\bcommit=([^\s]+)/i)?.[1] === commit,
+    )
+  )
+    return;
+  d.comment(
+    pr.number,
+    `[Human Review Guide] round=${round} commit=${commit}\n\n` +
+      `Summary\n${guide.summary}\n\n` +
+      `Steps\n${guide.steps.map((step, i) => `${i + 1}. ${step}`).join('\n')}\n\n` +
+      `Expected results\n${guide.expected.map((item) => `- ${item}`).join('\n')}\n\n` +
+      `Isolation\n${guide.isolation}\n\n` +
+      `Limitations / diagnostics\n${guide.limitations.map((item) => `- ${item}`).join('\n')}\n\n` +
+      `Approval checklist\n${guide.checklist.map((item) => `- [ ] ${item}`).join('\n')}`,
+  );
 }
 
 function latestReview(
@@ -1042,6 +1102,7 @@ async function processIssue(cfg: Config, d: Deps, issue: Issue): Promise<void> {
       headSha: evidence.headRefOid,
       lastStaffFeedback: staff.body,
     });
+    publishHumanReviewGuide(d, evidence, round);
     status(d, issue.number, 'ready_for_human_merge', { pr, headSha: evidence.headRefOid });
     d.save({
       ...d.load(),
