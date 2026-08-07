@@ -9,3 +9,10 @@ test('provider adapter forwards the opaque system-instructions name unchanged', 
     'Simulated response from gemini using system instructions "My Assistant / v2": hello',
   );
 });
+
+test('provider adapter reports unresolved system instructions without fallback', () => {
+  assert.throws(
+    () => sendChat('gemini', { prompt: 'hello', systemInstructions: 'unresolvable' }),
+    /Provider gemini could not resolve system instructions "unresolvable"\./,
+  );
+});
