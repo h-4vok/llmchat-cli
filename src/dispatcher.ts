@@ -987,7 +987,10 @@ export async function dispatch(cfg: Config, d: Deps): Promise<void> {
       }
       try {
         await processIssue(cfg, d, issue);
-        if (existingIssue) return;
+        // Temporarily process exactly one issue per invocation. This prevents
+        // state from one completed issue leaking into the next issue while the
+        // dispatcher transition logic is being hardened.
+        return;
       } catch (e) {
         const message = e instanceof Error ? e.message : String(e);
         console.error(`[loop] issue #${issue.number} bloqueada: ${message}`);

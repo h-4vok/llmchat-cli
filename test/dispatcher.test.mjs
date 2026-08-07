@@ -166,7 +166,7 @@ test('commands use argv, exit codes, retries, timeout and no shell contract', as
 test('dispatcher runs Worker, QA, then Staff and uses PR evidence instead of JSON', async () => {
   const h = harness();
   await dispatch(h.cfg, h.deps);
-  assert.equal(h.state().status, 'done');
+  assert.equal(h.state().status, 'ready_for_human_merge');
   assert.deepEqual(h.counts(), { workerCount: 1, qaCount: 1, staffCount: 1 });
   assert.deepEqual(
     h.runs.map((run) => run.input?.match(/Use the ([^ ]+)/)?.[1]),
@@ -188,10 +188,21 @@ test('dispatcher runs Worker, QA, then Staff and uses PR evidence instead of JSO
   );
 });
 
+test('dispatcher stops after one issue instead of draining the queue', async () => {
+  const h = harness([
+    { number: 1, title: 'first' },
+    { number: 2, title: 'second' },
+  ]);
+  await dispatch(h.cfg, h.deps);
+  assert.equal(h.state().status, 'ready_for_human_merge');
+  assert.deepEqual(h.counts(), { workerCount: 1, qaCount: 1, staffCount: 1 });
+  assert.deepEqual(h.state().completedIssues, [1]);
+});
+
 test('QA changes return to Worker and QA is repeated before Staff', async () => {
   const h = harness([{ number: 1, title: 'a' }], { qaVerdicts: ['changes_requested', 'passed'] });
   await dispatch(h.cfg, h.deps);
-  assert.equal(h.state().status, 'done');
+  assert.equal(h.state().status, 'ready_for_human_merge');
   assert.deepEqual(h.counts(), { workerCount: 2, qaCount: 2, staffCount: 1 });
   assert.deepEqual(
     h.runs.map((run) => run.input?.match(/Use the ([^ ]+)/)?.[1]),
@@ -204,7 +215,7 @@ test('Staff changes return to Worker and force QA before Staff re-review', async
     staffVerdicts: ['changes_requested', 'approved'],
   });
   await dispatch(h.cfg, h.deps);
-  assert.equal(h.state().status, 'done');
+  assert.equal(h.state().status, 'ready_for_human_merge');
   assert.deepEqual(h.counts(), { workerCount: 2, qaCount: 2, staffCount: 2 });
   assert.deepEqual(
     h.runs.map((run) => run.input?.match(/Use the ([^ ]+)/)?.[1]),
@@ -256,7 +267,7 @@ test('failed PR CI returns the issue to a recovered Worker without local npm gat
     ],
   });
   await dispatch(h.cfg, h.deps);
-  assert.equal(h.state().status, 'done');
+  assert.equal(h.state().status, 'ready_for_human_merge');
   assert.equal(h.counts().workerCount, 2);
   assert.equal(
     h.runs.some((run) => run.command === 'npm'),
