@@ -77,6 +77,7 @@ export type PullRequest = {
   baseRefName?: string;
   headRefName?: string;
   headRefOid?: string;
+  body?: string;
   mergeStateStatus?: string;
   mergeable?: string;
   reviews?: Review[];
@@ -117,6 +118,8 @@ type Deps = {
   onReclaim?: () => void;
   prepareWorkerBranch?: (issue: number) => { branch: string; stagingBaseSha: string };
   checkoutWorkerBranch?: (branch: string) => void;
+  updatePullRequestBody?: (pr: number, body: string) => void | Promise<void>;
+  pullRequestBody?: (pr: number) => string | Promise<string>;
 };
 type Spec = {
   command: string;
@@ -258,7 +261,7 @@ function pullRequest(pr: number): PullRequest {
     'view',
     String(pr),
     '--json',
-    'number,state,baseRefName,headRefName,headRefOid,mergeStateStatus,mergeable,reviews,comments,statusCheckRollup',
+    'number,state,baseRefName,headRefName,headRefOid,body,mergeStateStatus,mergeable,reviews,comments,statusCheckRollup',
   ]);
   return {
     number: raw.number,
@@ -266,6 +269,7 @@ function pullRequest(pr: number): PullRequest {
     baseRefName: raw.baseRefName,
     headRefName: raw.headRefName,
     headRefOid: raw.headRefOid,
+    body: raw.body ?? '',
     mergeStateStatus: raw.mergeStateStatus ?? raw.merge_state_status,
     mergeable: raw.mergeable,
     reviews: (raw.reviews ?? []).map((review: any) => ({
@@ -285,6 +289,20 @@ function pullRequest(pr: number): PullRequest {
       detailsUrl: check.detailsUrl ?? check.details_url,
     })),
   };
+}
+
+function updatePullRequestBody(pr: number, body: string): void {
+  const temp = join(tmpdir(), `llmchat-pr-${process.pid}-${Date.now()}.md`);
+  try {
+    writeFileSync(temp, body, 'utf8');
+    gh(['pr', 'edit', String(pr), '--body-file', temp]);
+  } finally {
+    rmSync(temp, { force: true });
+  }
+}
+
+function pullRequestBody(pr: number): string {
+  return ghJson<{ body?: string }>(['pr', 'view', String(pr), '--json', 'body']).body ?? '';
 }
 
 /** Keep the claimed issue's GitHub closing reference exactly once in a PR body. */
@@ -684,6 +702,11 @@ async function runWorker(
   const metadata = workerMetadata(output, pr);
   if (!metadata.pr || metadata.base !== (cfg.baseBranch ?? 'staging'))
     throw new Error('Worker must report an existing PR based on staging');
+  if (!d.pullRequest) throw new Error('GitHub PR evidence adapter is required');
+  const currentBody = await (d.pullRequestBody ?? pullRequestBody)(metadata.pr);
+  const normalizedBody = withIssueClosingReference(currentBody, issue.number);
+  if (normalizedBody !== currentBody.trim())
+    await (d.updatePullRequestBody ?? updatePullRequestBody)(metadata.pr, normalizedBody);
   d.save({ ...d.load(), pr: metadata.pr, workerPid: undefined, workerHeartbeatAt: d.now() });
   const evidence = await waitForEvidence(d, cfg, metadata.pr, (candidate) => {
     const head = candidate.headRefOid;

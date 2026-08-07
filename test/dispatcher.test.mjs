@@ -41,6 +41,7 @@ function harness(
   const saves = [];
   const comments = [];
   const runs = [];
+  const prBodyUpdates = [];
   const reviews = [];
   const pr = {
     number: 14,
@@ -48,6 +49,7 @@ function harness(
     baseRefName: 'staging',
     headRefName: overrides.headRefName ?? 'codex/issue-1',
     headRefOid: 'abc0',
+    body: overrides.prBody ?? 'Summary',
     mergeStateStatus: 'CLEAN',
     mergeable: 'MERGEABLE',
     comments: [],
@@ -128,6 +130,12 @@ function harness(
       pr.statusCheckRollup = checkSequences[Math.min(checkIndex++, checkSequences.length - 1)];
       return structuredClone(pr);
     },
+    updatePullRequestBody: async (number, body) => {
+      assert.equal(number, pr.number);
+      pr.body = body;
+      prBodyUpdates.push({ number, body });
+    },
+    pullRequestBody: () => pr.body,
     now: () => Date.now(),
     pid: () => process.pid,
     processAlive: (pid) => pid > 0 && pid !== -1,
@@ -150,6 +158,7 @@ function harness(
       state = next;
     },
     counts: () => ({ workerCount, qaCount, staffCount }),
+    prBodyUpdates,
     cfg: { ...baseConfig, ...overrides.config },
   };
 }
@@ -204,6 +213,15 @@ test('dispatcher runs Worker, QA, then Staff and uses PR evidence instead of JSO
   assert.equal(h.reviews[1].body.startsWith('[Staff Review]'), true);
   assert.equal(h.state().branch, 'codex/issue-1');
   assert.equal(h.state().stagingBaseSha, 'staging-sha-1');
+});
+
+test('dispatcher persists one closing reference for the claimed issue on create and recovery', async () => {
+  const h = harness([{ number: 17, title: 'seventeen', body: 'criteria' }], {
+    prBody: 'Summary\n\nCloses #1\nClose #99',
+  });
+  await dispatch(h.cfg, h.deps);
+  assert.deepEqual(h.prBodyUpdates, [{ number: 14, body: 'Summary\n\nCloses #17' }]);
+  assert.equal((h.prBodyUpdates[0].body.match(/^Closes #17$/gm) ?? []).length, 1);
 });
 
 test('worker branch convention is deterministic and rejects invalid issue numbers', () => {
