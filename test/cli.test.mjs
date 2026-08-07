@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -9,7 +9,7 @@ const cli = join(process.cwd(), 'dist', 'cli.js');
 function run(configHome, ...args) {
   return spawnSync(process.execPath, [cli, ...args], {
     encoding: 'utf8',
-    env: { ...process.env, XDG_CONFIG_HOME: configHome },
+    env: { ...process.env, HOME: configHome, USERPROFILE: configHome, LOCALAPPDATA: configHome },
   });
 }
 
@@ -26,6 +26,13 @@ test('chat supports provider precedence and deterministic output', () => {
   assert.equal(afterPrompt.status, 0);
   assert.match(afterPrompt.stdout, /gemini.*hello/i);
   assert.equal(run(configHome, 'config', 'set-default-provider', 'gemini').status, 0);
+  const configFile = join(configHome, 'llmchat', 'config.json');
+  const config = JSON.parse(readFileSync(configFile, 'utf8'));
+  assert.equal(config.schemaVersion, 1);
+  config.futureSetting = { enabled: true };
+  writeFileSync(configFile, `${JSON.stringify(config)}\n`);
+  assert.equal(run(configHome, 'config', 'set-default-provider', 'gemini').status, 0);
+  assert.deepEqual(JSON.parse(readFileSync(configFile, 'utf8')).futureSetting, { enabled: true });
   const saved = run(configHome, 'chat', 'hello');
   assert.match(saved.stdout, /gemini.*hello/i);
   assert.equal(run(configHome, 'chat', 'hello', '--provider', 'openai').status !== 0, true);
@@ -46,6 +53,20 @@ test('configuration validation, clearing, and help are predictable', () => {
   assert.equal(run(configHome, 'chat', '--help').status, 0);
   assert.equal(run(configHome, 'config', 'set-default-provider', 'gemini').status, 0);
   assert.equal(run(configHome, 'config', 'clear-default-provider').status, 0);
+  const cleared = JSON.parse(readFileSync(join(configHome, 'llmchat', 'config.json'), 'utf8'));
+  assert.equal(cleared.schemaVersion, 1);
+  assert.equal(cleared.defaultProvider, undefined);
   assert.equal(run(configHome, 'config', 'clear-default-provider').status, 0);
   assert.notEqual(run(configHome, 'chat', 'hello', '--provider', 'openai').status, 0);
+});
+
+test('malformed configuration fails without replacing the file', () => {
+  const configHome = mkdtempSync(join(tmpdir(), 'llmchat-cli-'));
+  const file = join(configHome, 'llmchat', 'config.json');
+  mkdirSync(join(configHome, 'llmchat'), { recursive: true });
+  writeFileSync(file, '{not-json');
+  const result = run(configHome, 'chat', 'hello');
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /Unable to read llmchat configuration/);
+  assert.equal(readFileSync(file, 'utf8'), '{not-json');
 });
