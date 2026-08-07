@@ -4,7 +4,14 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { test } from 'node:test';
-import { acquire, command, dispatch, prepareRecovery, runCommand } from '../dist/dispatcher.js';
+import {
+  acquire,
+  command,
+  dispatcherLockPath,
+  dispatch,
+  prepareRecovery,
+  runCommand,
+} from '../dist/dispatcher.js';
 
 const baseConfig = {
   baseBranch: 'staging',
@@ -242,7 +249,7 @@ test('active live run remains exclusive while stale recovery is allowed', async 
 
 test('stale locks recover safely and reclaim markers are atomic', () => {
   const h = harness();
-  const lock = join(h.root, '.llmchat', 'dispatcher.lock');
+  const lock = dispatcherLockPath(h.root);
   mkdirSync(lock, { recursive: true });
   writeFileSync(join(lock, 'owner.json'), '{stale');
   const first = acquire(h.deps, 1);
@@ -287,7 +294,7 @@ test('prepareRecovery preserves PR and removes only the issue from completion', 
 
 test('dead reclaim marker recovers after its TTL', () => {
   const h = harness();
-  const lock = join(h.root, '.llmchat', 'dispatcher.lock');
+  const lock = dispatcherLockPath(h.root);
   const marker = join(lock, 'reclaiming');
   mkdirSync(marker, { recursive: true });
   writeFileSync(join(lock, 'owner.json'), '{stale');

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { execFileSync, spawn } from 'node:child_process';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import {
   existsSync,
   mkdirSync,
@@ -11,6 +11,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { extname, isAbsolute, join } from 'node:path';
+import { tmpdir } from 'node:os';
 
 export type Status =
   | 'queued'
@@ -150,7 +151,21 @@ function writeState(s: State, file = stateFile): void {
   mkdirSync(join(file, '..'), { recursive: true });
   const tmp = `${file}.${process.pid}.tmp`;
   writeFileSync(tmp, JSON.stringify(s, null, 2) + '\n');
-  renameSync(tmp, file);
+  let lastError: unknown;
+  for (let attempt = 0; attempt < 5; attempt++) {
+    try {
+      renameSync(tmp, file);
+      return;
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  throw lastError;
+}
+
+export function dispatcherLockPath(rootPath: string): string {
+  const key = createHash('sha256').update(rootPath).digest('hex').slice(0, 16);
+  return join(tmpdir(), 'llmchat-cli-dispatcher', key, 'dispatcher.lock');
 }
 
 function resolveExecutable(commandName: string): string {
@@ -372,7 +387,7 @@ function rolePrompt(
 ): string {
   const issueContext = issue.body?.trim() || '(issue body unavailable; inspect it with gh)';
   if (role === 'worker')
-    return `Use the worker skill for GitHub issue #${issue.number}: ${issue.title}. This is dispatcher recovery run ${runId}, review round ${round}. Continue the existing task in the current checkout. ${pr ? `An existing PR is #${pr}; update that PR and never create a second PR.` : 'Create exactly one PR targeting staging if one does not exist.'} Do not merge. Inspect the issue, current PR diff, CI checks, and all [QA/SDET Review] and [Staff Review] feedback. Resolve every actionable finding and publish one PR conversation comment beginning with [Worker], including round=${round}, status=ready_for_review, pr=<number>, base=staging, and commit=<current head SHA>. The dispatcher will verify that comment on GitHub. Exit 0 only after the work and comment are complete; do not return JSON. Issue body:\n${issueContext}\n${context ? `Recovered context:\n${context}\n` : ''}${feedback ? `Actionable feedback to resolve:\n${feedback}\n` : ''}At the end, print a plain-text line exactly like WORKER_RESULT pr=<number> base=staging. All command success/failure is communicated by the process exit code.`;
+    return `Use the worker skill for GitHub issue #${issue.number}: ${issue.title}. This is dispatcher recovery run ${runId}, review round ${round}. Continue the existing task in the current checkout. ${pr ? `An existing PR is #${pr}; update that PR and never create a second PR.` : 'Create exactly one PR targeting staging if one does not exist.'} Do not merge. Inspect the issue, current PR diff, CI checks, and all [QA/SDET Review] and [Staff Review] feedback. Resolve every actionable finding and publish one PR conversation comment beginning with [Worker], including round=${round}, status=ready_for_review, pr=<number>, base=staging, and commit=<current head SHA>. The dispatcher will verify that comment on GitHub. Never delete or modify .llmchat/state.json or dispatcher runtime state. Exit 0 only after the work and comment are complete; do not return JSON. Issue body:\n${issueContext}\n${context ? `Recovered context:\n${context}\n` : ''}${feedback ? `Actionable feedback to resolve:\n${feedback}\n` : ''}At the end, print a plain-text line exactly like WORKER_RESULT pr=<number> base=staging. All command success/failure is communicated by the process exit code.`;
   if (role === 'qa')
     return `Use the qa-sdet skill for GitHub issue #${issue.number}: ${issue.title}. Review PR #${pr} against staging before Staff. Current head is ${headSha ?? 'unknown'} and this is review round ${round}. Inspect the acceptance criteria, diff, CI check results, regression coverage, and smoke evidence. Publish directly to the PR exactly one review beginning [QA/SDET Review] round=${round} verdict=passed, changes_requested, or blocked. Include Q<n> findings, exact evidence, and commit=${headSha ?? 'current'}. Do not edit code or merge. Exit 0 after publishing the review; do not return JSON. Issue body:\n${issueContext}`;
   return `Use the staff-reviewer skill for GitHub issue #${issue.number}: ${issue.title}. Review PR #${pr} against staging after QA has passed. Current head is ${headSha ?? 'unknown'} and this is review round ${round}. Perform the independent adversarial review for design, security, regressions, boundaries, and abuse cases. Publish directly to the PR exactly one review beginning [Staff Review] round=${round} verdict=approved or changes_requested, include S<n> findings when needed, and include commit=${headSha ?? 'current'}. Do not edit code or merge. Exit 0 after publishing the review; do not return JSON. Issue body:\n${issueContext}`;
@@ -804,15 +819,15 @@ export function prepareRecovery(
 
 export function acquire(d: Deps, ttl: number): string {
   const token = randomUUID();
-  mkdirSync(join(d.root, '.llmchat'), { recursive: true });
-  const lock = join(d.root, '.llmchat', 'dispatcher.lock');
+  const lock = dispatcherLockPath(d.root);
+  mkdirSync(join(lock, '..'), { recursive: true });
   for (let attempt = 0; attempt < 3; attempt++)
     try {
       mkdirSync(lock);
       writeState({ pid: d.pid(), createdAt: d.now(), token } as any, join(lock, 'owner.json'));
       return token;
     } catch {
-      const owner = join(d.root, '.llmchat', 'dispatcher.lock', 'owner.json');
+      const owner = join(lock, 'owner.json');
       let stale = false;
       try {
         const x: any = JSON.parse(readFileSync(owner, 'utf8'));
@@ -914,10 +929,10 @@ export async function dispatch(cfg: Config, d: Deps): Promise<void> {
       }
     }
   } finally {
-    const owner = join(d.root, '.llmchat', 'dispatcher.lock', 'owner.json');
+    const owner = join(dispatcherLockPath(d.root), 'owner.json');
     try {
       if (JSON.parse(readFileSync(owner, 'utf8')).token === lockToken)
-        rmSync(join(d.root, '.llmchat', 'dispatcher.lock'), { recursive: true, force: true });
+        rmSync(dispatcherLockPath(d.root), { recursive: true, force: true });
     } catch {
       /* lock already recovered */
     }

@@ -1,5 +1,6 @@
 node_modules/
 dist/
 .DS_Store
+.llmchat/
 .llmchat/state.json
 loop.config.json
