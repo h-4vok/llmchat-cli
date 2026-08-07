@@ -2,9 +2,14 @@
   "baseBranch": "staging",
   "workerCommand": ["codex", "exec"],
   "staffReviewCommand": ["codex", "exec"],
-  "qaCommand": ["npm", "test"],
-  "smokeCommand": ["npm", "run", "build"],
-  "stagingHealthCommand": ["npm", "test"],
-  "retries": 1,
-  "integrationBranchPrefix": "integration/"
+  "qaCommand": ["codex", "exec"],
+  "requiredPrChecks": ["pr-checks"],
+  "checkPollIntervalMs": 5000,
+  "checkTimeoutMs": 900000,
+  "evidencePollIntervalMs": 2000,
+  "evidenceTimeoutMs": 60000,
+  "workerLeaseMs": 900000,
+  "maxReviewRounds": 10,
+  "codexSandbox": "danger-full-access",
+  "lockTtlMs": 900000
 }

@@ -1,21 +1,23 @@
 # llmchat-cli
 
-CLI for sending a prompt to an authenticated web chat through a persistent browser profile, retrieving one response, and writing it to `stdout`; progress and errors go to `stderr`.
+CLI foundation for provider-backed chat. The MVP uses a deterministic simulation so it can be used and tested without network access; successful output goes to `stdout` and errors go to `stderr`.
 
 ## MVP
 
-- Supported provider: Gemini, using Chromium/Playwright and the persistent profile `~/.llmchat-cli/profiles/gemini`.
-- One prompt per invocation; guided login, CAPTCHA handling, retries, advanced configuration, and alternate formats are not supported yet.
-- ChatGPT and Perplexity are planned for later phases.
+- Supported provider: `gemini`.
+- The selected default is stored in the user-local configuration directory (`$XDG_CONFIG_HOME/llmchat/config.json`, or the platform equivalent).
+- Real provider requests, authentication, streaming, and additional providers are planned for later phases.
 
 ## Usage
 
 ```text
-llmchat --provider gemini "Explain what an API is in one sentence"
-llmchat --provider gemini --login
+llmchat config set-default-provider gemini
+llmchat chat "Explain what an API is in one sentence"
+llmchat chat "Explain what an API is" --provider gemini
+llmchat config clear-default-provider
 ```
 
-Requires Node.js 20+ and Chromium installed for Playwright. Login is completed manually in the browser window, and the session is retained in the local profile.
+Use `llmchat --help` and `llmchat config --help` for command usage and supported values. A provider can be passed before or after the prompt; the canonical form is `llmchat chat "<prompt>" --provider <provider>`.
 
 ## Development
 
@@ -25,13 +27,25 @@ npm run build
 npm test
 ```
 
+To install the current checkout as the global `llmchat` command while developing:
+
+```text
+npm run install:global
+llmchat --help
+llmchat chat --provider gemini "hello"
+```
+
+Remove the global development link with `npm run uninstall:global`.
+
 This repository contains the skeleton and the first end-to-end Gemini route. Open decisions are tracked as GitHub issues.
 
 ## Loop engineering v1
 
 The canonical specification is [issue #13](https://github.com/h-4vok/llmchat-cli/issues/13). Run the manual dispatcher with `npm run loop -- --list`, `npm run loop -- --status`, or `npm run loop`. Copy `loop.config.json.example` to `loop.config.json` to configure worker/review/QA commands. Local state is stored in `.llmchat/state.json` and is never committed.
 
-The flow is deliberately sequential: `Automation Ready` label → visible claim → worker → PR to `staging` → Staff/adversarial review → QA/SDET → smoke tests → ready for human merge. There is no automatic merge to `main`, no worktrees, and no parallelism. If staging is red, the dispatcher pauses; the Triage role must repair it and set `stagingGreen` in state before resuming.
+The flow is deliberately sequential: `Automation Ready` label → visible claim → Worker → PR CI → QA/SDET → Staff/adversarial review → ready for human merge. QA runs before Staff, and every Worker revision repeats QA before Staff. `npm test`, build, and format are PR checks in GitHub Actions; the dispatcher only polls their status. There is no automatic merge to `main`, no worktrees, and no parallelism.
+
+If the Worker process disappears, the dispatcher detects the stale lease, reconstructs context from local state and the existing PR, and starts a replacement Worker. To prepare a recovery test for an existing PR without changing its code, run `npm run loop -- --prepare-recovery 1 --pr <number>` and then run `npm run loop` normally.
 
 Roles and operating procedures: [`docs/loop-engineering-v1.md`](docs/loop-engineering-v1.md), [`docs/roles/`](docs/roles/).
 
