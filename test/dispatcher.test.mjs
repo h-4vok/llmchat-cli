@@ -215,11 +215,20 @@ test('dispatcher runs Worker, QA, then Staff and uses PR evidence instead of JSO
   assert.equal(h.state().stagingBaseSha, 'staging-sha-1');
 });
 
-test('dispatcher persists one closing reference for the claimed issue on create and recovery', async () => {
+test('create and recovery smoke paths capture the persisted claimed-issue PR body', async () => {
   const h = harness([{ number: 17, title: 'seventeen', body: 'criteria' }], {
     prBody: 'Summary\n\nCloses #1\nClose #99',
   });
   await dispatch(h.cfg, h.deps);
+  // This is the create-path handoff: the Worker receives the exact body contract
+  // that it must pass to `gh pr create`.
+  const workerInput =
+    h.runs.find((run) => run.input?.includes('Use the worker skill'))?.input ?? '';
+  assert.match(workerInput, /gh pr create\/edit \(or equivalent\) to persist that body/);
+  assert.match(workerInput, /exactly one line `Closes #17`/);
+
+  // This is the recovery/update path: the captured `gh pr edit --body-file`
+  // equivalent receives one normalized reference and no stale references.
   assert.deepEqual(h.prBodyUpdates, [{ number: 14, body: 'Summary\n\nCloses #17' }]);
   assert.equal((h.prBodyUpdates[0].body.match(/^Closes #17$/gm) ?? []).length, 1);
 });
