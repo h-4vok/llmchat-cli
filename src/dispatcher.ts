@@ -915,6 +915,15 @@ export function prepareWorkerBranch(
     cwd,
     encoding: 'utf8',
   }).trim();
+  try {
+    execFileSync('git', ['show-ref', '--verify', '--quiet', `refs/heads/${branch}`], {
+      cwd,
+      stdio: 'ignore',
+    });
+    throw new Error(`worker branch ${branch} already exists; refusing to overwrite it`);
+  } catch (error) {
+    if (error instanceof Error && error.message.includes('already exists')) throw error;
+  }
   execFileSync('git', ['checkout', '-B', branch, 'origin/staging'], { cwd, stdio: 'inherit' });
   return { branch, stagingBaseSha };
 }

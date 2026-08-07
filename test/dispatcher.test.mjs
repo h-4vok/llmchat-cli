@@ -9,6 +9,7 @@ import {
   command,
   dispatcherLockPath,
   dispatch,
+  prepareWorkerBranch,
   prepareRecovery,
   workerBranchName,
   resetRunState,
@@ -200,6 +201,34 @@ test('dispatcher runs Worker, QA, then Staff and uses PR evidence instead of JSO
 test('worker branch convention is deterministic and rejects invalid issue numbers', () => {
   assert.equal(workerBranchName(16), 'codex/issue-16');
   assert.throws(() => workerBranchName(0), /issue number must be positive/);
+});
+
+test('new branch preparation refuses to overwrite an existing worker branch', () => {
+  const root = mkdtempSync(join(tmpdir(), 'llmchat-git-'));
+  const remote = mkdtempSync(join(tmpdir(), 'llmchat-remote-'));
+  const runGit = (args) => {
+    const result = spawnSync('git', args, { cwd: root, encoding: 'utf8' });
+    assert.equal(result.status, 0, result.stderr);
+    return result.stdout.trim();
+  };
+  runGit(['init', '-b', 'staging']);
+  runGit(['config', 'user.email', 'test@example.com']);
+  runGit(['config', 'user.name', 'Test']);
+  writeFileSync(join(root, 'README.md'), 'staging');
+  runGit(['add', 'README.md']);
+  runGit(['commit', '-m', 'initial']);
+  const remoteResult = spawnSync('git', ['init', '--bare', remote], { encoding: 'utf8' });
+  assert.equal(remoteResult.status, 0, remoteResult.stderr);
+  runGit(['remote', 'add', 'origin', remote]);
+  runGit(['push', 'origin', 'staging']);
+  runGit(['branch', 'codex/issue-1']);
+  assert.throws(
+    () => prepareWorkerBranch(1, root),
+    /worker branch codex\/issue-1 already exists; refusing to overwrite it/,
+  );
+  assert.equal(runGit(['rev-parse', 'codex/issue-1']), runGit(['rev-parse', 'HEAD']));
+  rmSync(root, { recursive: true, force: true });
+  rmSync(remote, { recursive: true, force: true });
 });
 
 test('dispatcher rejects a PR whose worker branch violates the convention', async () => {
