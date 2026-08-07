@@ -49,3 +49,42 @@ test('configuration validation, clearing, and help are predictable', () => {
   assert.equal(run(configHome, 'config', 'clear-default-provider').status, 0);
   assert.notEqual(run(configHome, 'chat', 'hello', '--provider', 'openai').status, 0);
 });
+
+test('system-instructions aliases are equivalent and provider-neutral', () => {
+  const configHome = mkdtempSync(join(tmpdir(), 'llmchat-cli-'));
+  for (const flag of ['--gem', '--gpt', '--system-instructions']) {
+    const result = run(configHome, 'chat', '--provider', 'gemini', flag, 'My Assistant', 'hello');
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /using system instructions "My Assistant"/);
+  }
+  const mismatch = run(
+    configHome,
+    'chat',
+    '--provider',
+    'gemini',
+    '--gpt',
+    'My Assistant',
+    'hello',
+  );
+  assert.equal(mismatch.status, 0);
+});
+
+test('system-instructions aliases require one value and reject conflicts', () => {
+  const configHome = mkdtempSync(join(tmpdir(), 'llmchat-cli-'));
+  const missing = run(configHome, 'chat', '--provider', 'gemini', '--gem');
+  assert.notEqual(missing.status, 0);
+  assert.match(missing.stderr, /--gem requires a value/);
+  const conflict = run(
+    configHome,
+    'chat',
+    '--provider',
+    'gemini',
+    '--gem',
+    'one',
+    '--gpt',
+    'two',
+    'hello',
+  );
+  assert.notEqual(conflict.status, 0);
+  assert.match(conflict.stderr, /Conflicting options/);
+});
