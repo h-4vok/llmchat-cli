@@ -2,6 +2,7 @@
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir, platform } from 'node:os';
 import { dirname, join } from 'node:path';
+import { sendChat } from './provider.js';
 
 const SUPPORTED_PROVIDER = 'gemini';
 type Config = { schemaVersion: 1; defaultProvider?: string; [key: string]: unknown };
@@ -12,7 +13,7 @@ function configPath(): string {
       ? (process.env.LOCALAPPDATA ?? join(homedir(), 'AppData', 'Local'))
       : platform() === 'darwin'
         ? join(homedir(), 'Library', 'Application Support')
-        : join(homedir(), '.config');
+        : (process.env.XDG_CONFIG_HOME ?? join(homedir(), '.config'));
   return join(root, 'llmchat', 'config.json');
 }
 
@@ -37,10 +38,12 @@ function validateProvider(provider: string): void {
 
 function printRootHelp(): void {
   console.log(`Usage:
-  llmchat chat "<prompt>" [--provider <provider>]
+  llmchat chat "<prompt>" [--provider <provider>] [--gem|--gpt|--system-instructions <name>]
   llmchat config <set-default-provider|clear-default-provider> [provider]
 
 Supported providers: gemini
+
+System instructions: --gem, --gpt, and --system-instructions are equivalent aliases.
 
 Examples:
   llmchat chat "hello" --provider gemini
@@ -60,19 +63,41 @@ Examples:
   llmchat config clear-default-provider`);
 }
 
-function parseChat(args: string[]): { prompt?: string; provider?: string; help: boolean } {
+function parseChat(args: string[]): {
+  prompt?: string;
+  provider?: string;
+  systemInstructions?: string;
+  help: boolean;
+} {
   let provider: string | undefined;
+  let systemInstructions: string | undefined;
+  let systemInstructionsFlag: string | undefined;
   const promptParts: string[] = [];
   for (let i = 0; i < args.length; i += 1) {
     if (args[i] === '--help' || args[i] === '-h') return { help: true };
     if (args[i] === '--provider') {
       provider = args[++i];
-      if (!provider) throw new Error('--provider requires a value.');
+      if (!provider || provider.startsWith('--')) throw new Error('--provider requires a value.');
+    } else if (['--gem', '--gpt', '--system-instructions'].includes(args[i])) {
+      const flag = args[i];
+      if (systemInstructionsFlag)
+        throw new Error(
+          `Conflicting options: ${systemInstructionsFlag} cannot be combined with ${flag}.`,
+        );
+      systemInstructionsFlag = flag;
+      systemInstructions = args[++i];
+      if (!systemInstructions || systemInstructions.startsWith('--'))
+        throw new Error(`${flag} requires a value.`);
     } else if (args[i].startsWith('--')) {
       throw new Error(`Unknown option "${args[i]}".`);
     } else promptParts.push(args[i]);
   }
-  return { prompt: promptParts.join(' ').trim() || undefined, provider, help: false };
+  return {
+    prompt: promptParts.join(' ').trim() || undefined,
+    provider,
+    systemInstructions,
+    help: false,
+  };
 }
 
 function setDefaultProvider(provider: string): void {
@@ -118,7 +143,12 @@ function main(): void {
       'No provider selected. Set a default with "llmchat config set-default-provider gemini" or pass "--provider gemini".',
     );
   validateProvider(provider);
-  console.log(`Simulated response from ${provider}: ${parsed.prompt}`);
+  console.log(
+    sendChat(provider, {
+      prompt: parsed.prompt,
+      systemInstructions: parsed.systemInstructions,
+    }),
+  );
 }
 
 try {

@@ -7,9 +7,17 @@ import { test } from 'node:test';
 
 const cli = join(process.cwd(), 'dist', 'cli.js');
 function run(configHome, ...args) {
+  const options = typeof args[0] === 'object' ? args.shift() : {};
   return spawnSync(process.execPath, [cli, ...args], {
     encoding: 'utf8',
-    env: { ...process.env, HOME: configHome, USERPROFILE: configHome, LOCALAPPDATA: configHome },
+    env: {
+      ...process.env,
+      HOME: configHome,
+      USERPROFILE: configHome,
+      LOCALAPPDATA: configHome,
+      XDG_CONFIG_HOME: join(configHome, '.config'),
+      ...options.env,
+    },
   });
 }
 
@@ -68,6 +76,79 @@ test('configuration validation, clearing, and help are predictable', () => {
   assert.equal(cleared.defaultProvider, undefined);
   assert.equal(run(configHome, 'config', 'clear-default-provider').status, 0);
   assert.notEqual(run(configHome, 'chat', 'hello', '--provider', 'openai').status, 0);
+});
+
+test('Linux configuration honors XDG_CONFIG_HOME before HOME', () => {
+  if (process.platform !== 'linux') return;
+  const home = mkdtempSync(join(tmpdir(), 'llmchat-home-'));
+  const xdgConfigHome = mkdtempSync(join(tmpdir(), 'llmchat-xdg-'));
+  const xdgFile = join(xdgConfigHome, 'llmchat', 'config.json');
+  const homeFile = join(home, '.config', 'llmchat', 'config.json');
+
+  const saved = run(
+    home,
+    { env: { XDG_CONFIG_HOME: xdgConfigHome } },
+    'config',
+    'set-default-provider',
+    'gemini',
+  );
+  assert.equal(saved.status, 0, saved.stderr);
+  assert.equal(JSON.parse(readFileSync(xdgFile, 'utf8')).defaultProvider, 'gemini');
+  assert.throws(() => readFileSync(homeFile, 'utf8'), { code: 'ENOENT' });
+});
+
+test('system-instructions aliases are equivalent and provider-neutral', () => {
+  const configHome = mkdtempSync(join(tmpdir(), 'llmchat-cli-'));
+  for (const flag of ['--gem', '--gpt', '--system-instructions']) {
+    const result = run(configHome, 'chat', '--provider', 'gemini', flag, 'My Assistant', 'hello');
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /using system instructions "My Assistant"/);
+  }
+  const mismatch = run(
+    configHome,
+    'chat',
+    '--provider',
+    'gemini',
+    '--gpt',
+    'My Assistant',
+    'hello',
+  );
+  assert.equal(mismatch.status, 0);
+});
+
+test('system-instructions aliases require one value and reject conflicts', () => {
+  const configHome = mkdtempSync(join(tmpdir(), 'llmchat-cli-'));
+  const missing = run(configHome, 'chat', '--provider', 'gemini', '--gem');
+  assert.notEqual(missing.status, 0);
+  assert.match(missing.stderr, /--gem requires a value/);
+  const missingBeforeOption = run(configHome, 'chat', '--gem', '--provider', 'gemini', 'hello');
+  assert.notEqual(missingBeforeOption.status, 0);
+  assert.match(missingBeforeOption.stderr, /--gem requires a value/);
+  const conflict = run(
+    configHome,
+    'chat',
+    '--provider',
+    'gemini',
+    '--gem',
+    'one',
+    '--gpt',
+    'two',
+    'hello',
+  );
+  assert.notEqual(conflict.status, 0);
+  assert.match(conflict.stderr, /Conflicting options/);
+});
+
+test('system-instructions aliases are documented and omitted selection is unchanged', () => {
+  const configHome = mkdtempSync(join(tmpdir(), 'llmchat-cli-'));
+  const help = run(configHome, 'chat', '--help');
+  assert.equal(help.status, 0);
+  assert.match(help.stdout, /--gem/);
+  assert.match(help.stdout, /--gpt/);
+  assert.match(help.stdout, /--system-instructions/);
+  const withoutSelection = run(configHome, 'chat', '--provider', 'gemini', 'hello');
+  assert.equal(withoutSelection.status, 0);
+  assert.doesNotMatch(withoutSelection.stdout, /using system instructions/);
 });
 
 test('malformed configuration fails without replacing the file', () => {

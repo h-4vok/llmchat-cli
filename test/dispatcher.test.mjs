@@ -42,6 +42,8 @@ function harness(
     baseRefName: 'staging',
     headRefName: 'codex/test',
     headRefOid: 'abc0',
+    mergeStateStatus: 'CLEAN',
+    mergeable: 'MERGEABLE',
     comments: [],
     reviews,
     statusCheckRollup: [{ name: 'pr-checks', status: 'COMPLETED', conclusion: 'SUCCESS' }],
@@ -89,6 +91,8 @@ function harness(
             body: `[Worker] round=${round} status=ready_for_review pr=${pr.number} base=staging commit=${pr.headRefOid}`,
             createdAt: `${workerCount}`,
           });
+        pr.comments.at(-1).body +=
+          `\n\n[Human Verification]\n\`\`\`json\n${JSON.stringify({ summary: 'Exercise the CLI change.', steps: ['Run the focused command.'], expected: ['The documented output appears.'], isolation: 'Use a temporary checkout and no credentials.', limitations: ['A failed command indicates the change is not ready.'], checklist: ['Behavior matches the acceptance criteria.'] })}\n\`\`\``;
         return `WORKER_RESULT pr=${pr.number} base=staging`;
       }
       if (role === 'qa') {
@@ -178,6 +182,10 @@ test('dispatcher runs Worker, QA, then Staff and uses PR evidence instead of JSO
   );
   assert.equal(h.reviews[0].body.startsWith('[QA/SDET Review]'), true);
   assert.equal(h.reviews[1].body.startsWith('[Staff Review]'), true);
+  assert.equal(
+    h.comments.some(([, body]) => body.startsWith('[Human Review Guide]')),
+    true,
+  );
 });
 
 test('QA changes return to Worker and QA is repeated before Staff', async () => {
@@ -217,6 +225,26 @@ test('recovery detects stale Worker state, starts a new Worker and reuses the ex
     h.comments.some(([, body]) => body.includes('Worker perdido')),
     true,
   );
+});
+
+test('conflicting Worker PR is rejected before reviews', async () => {
+  const h = harness([{ number: 1, title: 'a' }]);
+  h.deps.pullRequest = () => ({
+    number: 14,
+    state: 'OPEN',
+    baseRefName: 'staging',
+    headRefName: 'codex/test',
+    headRefOid: 'abc1',
+    mergeStateStatus: 'DIRTY',
+    mergeable: 'CONFLICTING',
+    comments: [{ body: '[Worker] round=1 status=ready_for_review pr=14 base=staging commit=abc1' }],
+    reviews: [],
+    statusCheckRollup: [{ name: 'pr-checks', status: 'COMPLETED', conclusion: 'SUCCESS' }],
+  });
+  await dispatch(h.cfg, h.deps);
+  assert.equal(h.counts().qaCount, 0);
+  assert.equal(h.state().status, 'worker_recovery_pending');
+  assert.match(h.state().lastError, /remains conflicting or dirty/);
 });
 
 test('failed PR CI returns the issue to a recovered Worker without local npm gates', async () => {
