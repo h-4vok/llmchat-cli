@@ -212,6 +212,15 @@ test('dispatcher rejects a PR whose worker branch violates the convention', asyn
   );
 });
 
+test('dispatcher rejects a configurable non-staging PR base explicitly', async () => {
+  const h = harness();
+  await assert.rejects(
+    () => dispatch({ ...h.cfg, baseBranch: 'main' }, h.deps),
+    /Worker PR baseBranch must be staging; found main/,
+  );
+  assert.equal(h.runs.length, 0);
+});
+
 test('dispatcher stops after one issue instead of draining the queue', async () => {
   const h = harness([
     { number: 1, title: 'first' },

@@ -665,6 +665,8 @@ async function runWorker(
   context: string,
   feedback: string,
 ): Promise<number> {
+  if (cfg.baseBranch !== undefined && cfg.baseBranch !== 'staging')
+    throw new Error(`Worker PR baseBranch must be staging; found ${cfg.baseBranch}`);
   if (!cfg.workerCommand) throw new Error('workerCommand is required');
   const runId = randomUUID();
   status(d, issue.number, 'worker_recovery_pending', {
@@ -988,6 +990,8 @@ export function acquire(d: Deps, ttl: number): string {
 }
 
 export async function dispatch(cfg: Config, d: Deps): Promise<void> {
+  if (cfg.baseBranch !== undefined && cfg.baseBranch !== 'staging')
+    throw new Error(`Worker PR baseBranch must be staging; found ${cfg.baseBranch}`);
   const initial = d.load();
   const recovery = initial.status === 'worker_recovery_pending' || isStaleWorker(initial, cfg, d);
   if (isActiveStatus(initial.status) && !recovery)
