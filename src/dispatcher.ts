@@ -404,7 +404,7 @@ function roleCommand(value: Command | undefined, issue: number, cfg: Config): Sp
   ) {
     return {
       ...spec,
-      args: [...spec.args, '--sandbox', cfg.codexSandbox ?? 'danger-full-access'],
+      args: [...spec.args, '--sandbox', cfg.codexSandbox ?? 'read-only'],
     };
   }
   return spec;

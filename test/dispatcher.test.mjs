@@ -168,6 +168,14 @@ test('dispatcher runs Worker, QA, then Staff and uses PR evidence instead of JSO
     h.runs.map((run) => run.input?.match(/Use the ([^ ]+)/)?.[1]),
     ['worker', 'qa-sdet', 'staff-reviewer'],
   );
+  assert.deepEqual(
+    h.runs.map((run) => run.args.slice(-2)),
+    [
+      ['--sandbox', 'read-only'],
+      ['--sandbox', 'read-only'],
+      ['--sandbox', 'read-only'],
+    ],
+  );
   assert.equal(h.reviews[0].body.startsWith('[QA/SDET Review]'), true);
   assert.equal(h.reviews[1].body.startsWith('[Staff Review]'), true);
 });
