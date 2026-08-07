@@ -13,7 +13,7 @@ function configPath(): string {
       ? (process.env.LOCALAPPDATA ?? join(homedir(), 'AppData', 'Local'))
       : platform() === 'darwin'
         ? join(homedir(), 'Library', 'Application Support')
-        : join(homedir(), '.config');
+        : (process.env.XDG_CONFIG_HOME ?? join(homedir(), '.config'));
   return join(root, 'llmchat', 'config.json');
 }
 

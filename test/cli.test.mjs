@@ -7,9 +7,16 @@ import { test } from 'node:test';
 
 const cli = join(process.cwd(), 'dist', 'cli.js');
 function run(configHome, ...args) {
+  const options = typeof args[0] === 'object' ? args.shift() : {};
   return spawnSync(process.execPath, [cli, ...args], {
     encoding: 'utf8',
-    env: { ...process.env, HOME: configHome, USERPROFILE: configHome, LOCALAPPDATA: configHome },
+    env: {
+      ...process.env,
+      HOME: configHome,
+      USERPROFILE: configHome,
+      LOCALAPPDATA: configHome,
+      ...options.env,
+    },
   });
 }
 
@@ -68,6 +75,25 @@ test('configuration validation, clearing, and help are predictable', () => {
   assert.equal(cleared.defaultProvider, undefined);
   assert.equal(run(configHome, 'config', 'clear-default-provider').status, 0);
   assert.notEqual(run(configHome, 'chat', 'hello', '--provider', 'openai').status, 0);
+});
+
+test('Linux configuration honors XDG_CONFIG_HOME before HOME', () => {
+  if (process.platform !== 'linux') return;
+  const home = mkdtempSync(join(tmpdir(), 'llmchat-home-'));
+  const xdgConfigHome = mkdtempSync(join(tmpdir(), 'llmchat-xdg-'));
+  const xdgFile = join(xdgConfigHome, 'llmchat', 'config.json');
+  const homeFile = join(home, '.config', 'llmchat', 'config.json');
+
+  const saved = run(
+    home,
+    { env: { XDG_CONFIG_HOME: xdgConfigHome } },
+    'config',
+    'set-default-provider',
+    'gemini',
+  );
+  assert.equal(saved.status, 0, saved.stderr);
+  assert.equal(JSON.parse(readFileSync(xdgFile, 'utf8')).defaultProvider, 'gemini');
+  assert.throws(() => readFileSync(homeFile, 'utf8'), { code: 'ENOENT' });
 });
 
 test('system-instructions aliases are equivalent and provider-neutral', () => {
