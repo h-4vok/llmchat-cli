@@ -173,6 +173,26 @@ export function dispatcherLockPath(rootPath: string): string {
   return join(tmpdir(), 'llmchat-cli-dispatcher', key, 'dispatcher.lock');
 }
 
+export function recoverStaleLock(rootPath = root, processAlive = defaultProcessAlive): string {
+  const lock = dispatcherLockPath(rootPath);
+  if (!existsSync(lock)) return 'No dispatcher lock found.';
+  const ownerFile = join(lock, 'owner.json');
+  if (!existsSync(ownerFile)) throw new Error(`dispatcher lock has no owner file: ${lock}`);
+  let owner: { pid?: number };
+  try {
+    owner = JSON.parse(readFileSync(ownerFile, 'utf8'));
+  } catch {
+    throw new Error(`dispatcher lock owner is invalid; inspect manually: ${ownerFile}`);
+  }
+  const pid = owner.pid;
+  if (typeof pid !== 'number' || !Number.isInteger(pid) || pid <= 0)
+    throw new Error(`dispatcher lock owner has no valid PID: ${ownerFile}`);
+  if (processAlive(pid))
+    throw new Error(`dispatcher owner PID ${pid} is still running; lock was not changed`);
+  rmSync(lock, { recursive: true, force: true });
+  return `Recovered stale dispatcher lock owned by PID ${pid}.`;
+}
+
 function resolveExecutable(commandName: string): string {
   if (process.platform !== 'win32' || isAbsolute(commandName) || extname(commandName))
     return commandName;
@@ -293,7 +313,7 @@ export function runCommand(spec: Spec | undefined): Promise<string> {
   const attempt = (n: number): Promise<string> =>
     new Promise((resolve, reject) => {
       console.error(
-        `[loop] ejecutando (${n + 1}/${spec.retries + 1}): ${spec.command} ${spec.args.join(' ')}`,
+        `[sloop] ejecutando (${n + 1}/${spec.retries + 1}): ${spec.command} ${spec.args.join(' ')}`,
       );
       const child = spawn(launchExecutable, spec.args, {
         cwd: root,
@@ -358,6 +378,10 @@ function isActiveStatus(status: Status | undefined): boolean {
   return Boolean(status && !['done', 'ready_for_human_merge', 'blocked'].includes(status));
 }
 
+function hasPersistedRecoveryContext(state: State): boolean {
+  return Boolean(state.pr || state.branch);
+}
+
 function isStaleWorker(s: State, cfg: Config, d: Deps): boolean {
   if (!isWorkerStatus(s.status)) return false;
   if (typeof s.workerPid === 'number') return !(d.processAlive ?? defaultProcessAlive)(s.workerPid);
@@ -375,10 +399,28 @@ function skillFor(status: Status | undefined): string {
 
 function status(d: Deps, issue: number, next: Status, extra: Partial<State> = {}): void {
   d.save({ ...d.load(), issue, status: next, updatedAt: d.now(), ...extra });
-  console.error(`[loop] issue #${issue}: ${next}`);
+  console.error(`[sloop] issue #${issue}: ${next}`);
   d.comment(
     issue,
-    `Loop engineering v2: estado ${next}. Skill activa: ${skillFor(next)}. QA precede a Staff; no se hace merge automático.`,
+    `Sloop engineering v2: estado ${next}. Skill activa: ${skillFor(next)}. QA precede a Staff; no se hace merge automático.`,
+  );
+}
+
+function claimNewIssue(d: Deps, issue: number): void {
+  const current = d.load();
+  d.save({
+    completedIssues: current.completedIssues ?? [],
+    stagingGreen: current.stagingGreen,
+    issue,
+    status: 'claimed',
+    reviewRound: 1,
+    drainStatus: 'running',
+    updatedAt: d.now(),
+  });
+  console.error(`[sloop] issue #${issue}: claimed`);
+  d.comment(
+    issue,
+    `Sloop engineering v2: estado claimed. Skill activa: ${skillFor('claimed')}. QA precede a Staff; no se hace merge automÃ¡tico.`,
   );
 }
 
@@ -445,67 +487,6 @@ function latestWorkerComment(pr: PullRequest, round: number, headSha?: string) {
     )
     .sort((a, b) => String(a.createdAt).localeCompare(String(b.createdAt)))
     .at(-1);
-}
-
-type HumanReviewGuide = {
-  summary: string;
-  steps: string[];
-  expected: string[];
-  isolation: string;
-  limitations: string[];
-  checklist: string[];
-};
-
-function humanReviewGuide(comment: { body?: string } | undefined): HumanReviewGuide | undefined {
-  const match = comment?.body?.match(/\[Human Verification\]\s*```json\s*([\s\S]*?)```/i);
-  if (!match) return undefined;
-  try {
-    const guide = JSON.parse(match[1]) as Partial<HumanReviewGuide>;
-    const strings = (value: unknown) =>
-      Array.isArray(value) &&
-      value.length > 0 &&
-      value.every((item) => typeof item === 'string' && item.trim());
-    if (
-      typeof guide.summary !== 'string' ||
-      !guide.summary.trim() ||
-      !strings(guide.steps) ||
-      !strings(guide.expected) ||
-      typeof guide.isolation !== 'string' ||
-      !guide.isolation.trim() ||
-      !strings(guide.limitations) ||
-      !strings(guide.checklist)
-    )
-      return undefined;
-    return guide as HumanReviewGuide;
-  } catch {
-    return undefined;
-  }
-}
-
-function publishHumanReviewGuide(d: Deps, pr: PullRequest, round: number): void {
-  const worker = latestWorkerComment(pr, round, pr.headRefOid);
-  const guide = humanReviewGuide(worker);
-  if (!guide || !pr.headRefOid)
-    throw new Error('Worker evidence must contain a complete [Human Verification] guide');
-  const commit = pr.headRefOid;
-  if (
-    (pr.comments ?? []).some(
-      (comment) =>
-        comment.body?.trim().startsWith('[Human Review Guide]') &&
-        comment.body?.match(/\bcommit=([^\s]+)/i)?.[1] === commit,
-    )
-  )
-    return;
-  d.comment(
-    pr.number,
-    `[Human Review Guide] round=${round} commit=${commit}\n\n` +
-      `Summary\n${guide.summary}\n\n` +
-      `Steps\n${guide.steps.map((step, i) => `${i + 1}. ${step}`).join('\n')}\n\n` +
-      `Expected results\n${guide.expected.map((item) => `- ${item}`).join('\n')}\n\n` +
-      `Isolation\n${guide.isolation}\n\n` +
-      `Limitations / diagnostics\n${guide.limitations.map((item) => `- ${item}`).join('\n')}\n\n` +
-      `Approval checklist\n${guide.checklist.map((item) => `- [ ] ${item}`).join('\n')}`,
-  );
 }
 
 function latestReview(
@@ -612,7 +593,7 @@ async function waitForCi(
         `required PR checks did not finish before timeout: ${checkFeedback(checks, required)}`,
       );
     console.error(
-      `[loop] issue #${issue}: esperando checks del PR #${prNumber}: ${checkFeedback(checks, required)}`,
+      `[sloop] issue #${issue}: esperando checks del PR #${prNumber}: ${checkFeedback(checks, required)}`,
     );
     await (d.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms))))(
       cfg.checkPollIntervalMs ?? 5000,
@@ -773,7 +754,7 @@ async function runReview(
 
 function maxRounds(cfg: Config, round: number): void {
   if (round > (cfg.maxReviewRounds ?? 10))
-    throw new Error(`review loop exceeded maxReviewRounds=${cfg.maxReviewRounds ?? 10}`);
+    throw new Error(`review sloop exceeded maxReviewRounds=${cfg.maxReviewRounds ?? 10}`);
 }
 
 async function processIssue(cfg: Config, d: Deps, issue: Issue): Promise<void> {
@@ -855,7 +836,6 @@ async function processIssue(cfg: Config, d: Deps, issue: Issue): Promise<void> {
       headSha: evidence.headRefOid,
       lastStaffFeedback: staff.body,
     });
-    publishHumanReviewGuide(d, evidence, round);
     status(d, issue.number, 'ready_for_human_merge', { pr, headSha: evidence.headRefOid });
     d.save({
       ...d.load(),
@@ -865,7 +845,7 @@ async function processIssue(cfg: Config, d: Deps, issue: Issue): Promise<void> {
     });
     d.comment(
       issue.number,
-      '[Worker] loop gates passed; ready_for_human_merge, no merge performed.',
+      '[Worker] sloop gates passed; ready_for_human_merge, no merge performed.',
     );
     return;
   }
@@ -888,13 +868,10 @@ export function prepareRecovery(
     workerPid: -1,
     workerStartedAt: staleAt,
     workerHeartbeatAt: staleAt,
-    workerRecoveryCount: 0,
-    reviewRound: 1,
+    workerRecoveryCount: state.workerRecoveryCount ?? 0,
+    reviewRound: state.reviewRound ?? 1,
     completedIssues: (state.completedIssues ?? []).filter((number) => number !== issue),
     lastError: undefined,
-    lastCiFeedback: undefined,
-    lastQaFeedback: undefined,
-    lastStaffFeedback: undefined,
     drainStatus: 'running',
     updatedAt: now,
   };
@@ -1007,7 +984,10 @@ export async function dispatch(cfg: Config, d: Deps): Promise<void> {
   if (cfg.baseBranch !== undefined && cfg.baseBranch !== 'staging')
     throw new Error(`Worker PR baseBranch must be staging; found ${cfg.baseBranch}`);
   const initial = d.load();
-  const recovery = initial.status === 'worker_recovery_pending' || isStaleWorker(initial, cfg, d);
+  const recovery =
+    initial.status === 'worker_recovery_pending' ||
+    isStaleWorker(initial, cfg, d) ||
+    (initial.status === 'blocked' && hasPersistedRecoveryContext(initial));
   if (isActiveStatus(initial.status) && !recovery)
     throw new Error(`active run exists for issue #${initial.issue}`);
   const lockToken = acquire(d, cfg.lockTtlMs ?? 900000);
@@ -1023,7 +1003,13 @@ export async function dispatch(cfg: Config, d: Deps): Promise<void> {
         : d.eligible().find((candidate) => !processed.has(candidate.number));
       if (!issue) {
         if (existingIssue) throw new Error(`issue #${existingIssue} is not eligible for recovery`);
-        d.save({ ...d.load(), status: 'done', drainStatus: 'done' });
+        d.save({
+          completedIssues: d.load().completedIssues ?? [],
+          stagingGreen: d.load().stagingGreen,
+          status: 'done',
+          drainStatus: 'done',
+          updatedAt: d.now(),
+        });
         return;
       }
       processed.add(issue.number);
@@ -1045,7 +1031,7 @@ export async function dispatch(cfg: Config, d: Deps): Promise<void> {
             'Dispatcher detectó un Worker perdido y levantará una ejecución de recovery.',
           );
         } else {
-          status(d, issue.number, 'claimed', { pr: d.load().pr });
+          claimNewIssue(d, issue.number);
           d.comment(issue.number, 'Dispatcher reclama esta issue de forma exclusiva.');
           const prepared = (d.prepareWorkerBranch ?? ((number) => prepareWorkerBranch(number)))(
             issue.number,
@@ -1063,10 +1049,12 @@ export async function dispatch(cfg: Config, d: Deps): Promise<void> {
         return;
       } catch (e) {
         const message = e instanceof Error ? e.message : String(e);
-        console.error(`[loop] issue #${issue.number} bloqueada: ${message}`);
+        console.error(`[sloop] issue #${issue.number} bloqueada: ${message}`);
         const current = d.load();
         const preserveRecovery =
-          isWorkerStatus(current.status) || current.status === 'worker_recovery_pending';
+          isWorkerStatus(current.status) ||
+          current.status === 'worker_recovery_pending' ||
+          hasPersistedRecoveryContext(current);
         status(d, issue.number, preserveRecovery ? 'worker_recovery_pending' : 'blocked', {
           lastError: message,
           pr: current.pr,
@@ -1091,17 +1079,21 @@ async function main() {
     console.log(JSON.stringify(readState(), null, 2));
     return;
   }
-  const cfg: Config = existsSync(join(root, 'loop.config.json'))
-    ? JSON.parse(readFileSync(join(root, 'loop.config.json'), 'utf8'))
+  const cfg: Config = existsSync(join(root, 'sloop.config.json'))
+    ? JSON.parse(readFileSync(join(root, 'sloop.config.json'), 'utf8'))
     : {};
   if (args.includes('--list')) {
     console.log(JSON.stringify(eligible(), null, 2));
     return;
   }
+  if (args.includes('--recover-lock')) {
+    console.log(recoverStaleLock(root));
+    return;
+  }
   if (args.includes('--reset')) {
     const state = readState();
     writeState(resetRunState(state));
-    console.log('Estado local del loop reiniciado. Ejecutá npm run loop.');
+    console.log('Estado local del sloop reiniciado. Ejecutá npm run sloop.');
     return;
   }
   const recoveryIndex = args.indexOf('--prepare-recovery');
@@ -1114,7 +1106,7 @@ async function main() {
     if (!pr || !Number.isInteger(pr))
       throw new Error('--prepare-recovery requires --pr or an existing state.pr');
     writeState(prepareRecovery(readState(), issue, pr, Date.now(), cfg.workerLeaseMs ?? 900000));
-    console.log(`Recovery preparado para issue #${issue}, PR #${pr}. Ejecutá npm run loop.`);
+    console.log(`Recovery preparado para issue #${issue}, PR #${pr}. Ejecutá npm run sloop.`);
     return;
   }
   await dispatch(cfg, {

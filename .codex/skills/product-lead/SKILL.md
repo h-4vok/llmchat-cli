@@ -1,6 +1,6 @@
 ---
 name: product-lead
-description: Turn ambiguous product, technical, or business conversations into complete GitHub issues that can be marked Automation Ready. Use when preparing or refining work for the sequential engineering loop.
+description: Turn ambiguous product, technical, or business conversations into complete GitHub issues that can be marked Automation Ready. Use when preparing or refining work for the sequential engineering sloop.
 ---
 
 # product-lead

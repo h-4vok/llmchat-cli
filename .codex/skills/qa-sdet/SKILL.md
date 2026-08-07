@@ -1,6 +1,6 @@
 ---
 name: qa-sdet
-description: Validate llmchat-cli PR acceptance criteria, regression coverage, smoke behavior, and reproducible test evidence. Use after staff review or for independent QA of loop changes.
+description: Validate llmchat-cli PR acceptance criteria, regression coverage, smoke behavior, and reproducible test evidence. Use after staff review or for independent QA of sloop changes.
 ---
 
 # qa-sdet

@@ -1,13 +1,13 @@
-# Loop engineering v1 operation
+# Sloop engineering v1 operation
 
 ## Execution
 
 1. Product Lead completes the requirements, criteria, risks, and out-of-scope items; only then applies `Automation Ready`.
-2. Dispatcher runs `npm run loop` manually, selects the lowest-numbered open issue, and writes local state. It never starts another active task.
+2. Dispatcher runs `npm run sloop` manually, selects the lowest-numbered open issue, and writes local state. It never starts another active task.
 3. Worker creates or updates a PR whose base is `staging`; the Worker publishes `[Worker]` evidence in the PR.
 4. GitHub Actions owns format, test, and build gates. The dispatcher polls the required PR checks and never executes `npm test` as a local gate.
 5. QA/SDET posts a review first. Staff Reviewer posts an independent adversarial review only after QA passes. Feedback returns to a replacement or continuing Worker and increments `reviewRound`.
-6. Only when CI is green and QA plus Staff are clear on the current head is `ready_for_human_merge` set. A person decides whether to merge; `main` remains protected from the loop.
+6. Only when CI is green and QA plus Staff are clear on the current head is `ready_for_human_merge` set. A person decides whether to merge; `main` remains protected from sloop.
 
 ## PR comment protocol
 
@@ -23,4 +23,4 @@ For a batch, create `integration/<identifier>` from `staging`, associate each is
 
 ## Configuration and extensions
 
-`loop.config.json` configures the Worker, Staff, and QA role commands, required PR check names, polling timeouts, Worker lease, review-round limit, and the Codex sandbox used by automated roles. Automated local roles default to `danger-full-access` because they must commit, push, and publish GitHub evidence; this is scoped to the configured checkout and should only be used in a trusted automation environment. `npm test`, build, and format belong in `.github/workflows/pr-checks.yml`, not in this configuration. State may be migrated to a remote store and commands may use API adapters in the future without changing the gating policy.
+`sloop.config.json` configures the Worker, Staff, and QA role commands, required PR check names, polling timeouts, Worker lease, review-round limit, and the Codex sandbox used by automated roles. Automated local roles default to `danger-full-access` because they must commit, push, and publish GitHub evidence; this is scoped to the configured checkout and should only be used in a trusted automation environment. `npm test`, build, and format belong in `.github/workflows/pr-checks.yml`, not in this configuration. State may be migrated to a remote store and commands may use API adapters in the future without changing the gating policy.
