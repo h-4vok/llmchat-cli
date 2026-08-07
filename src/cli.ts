@@ -1,20 +1,26 @@
 #!/usr/bin/env node
-import { mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
-import { homedir } from 'node:os';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { homedir, platform } from 'node:os';
 import { dirname, join } from 'node:path';
 
 const SUPPORTED_PROVIDER = 'gemini';
-type Config = { defaultProvider?: string };
+type Config = { schemaVersion: 1; defaultProvider?: string; [key: string]: unknown };
 
 function configPath(): string {
   const root =
-    process.env.XDG_CONFIG_HOME ?? process.env.LOCALAPPDATA ?? join(homedir(), '.config');
+    platform() === 'win32'
+      ? (process.env.LOCALAPPDATA ?? join(homedir(), 'AppData', 'Local'))
+      : platform() === 'darwin'
+        ? join(homedir(), 'Library', 'Application Support')
+        : join(homedir(), '.config');
   return join(root, 'llmchat', 'config.json');
 }
 
-function readConfig(): Config {
+function readConfig(): Partial<Config> {
   try {
-    return JSON.parse(readFileSync(configPath(), 'utf8')) as Config;
+    const parsed: unknown = JSON.parse(readFileSync(configPath(), 'utf8'));
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('invalid');
+    return parsed as Partial<Config>;
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return {};
     throw new Error('Unable to read llmchat configuration.');
@@ -96,17 +102,22 @@ function parseChat(args: string[]): {
 function setDefaultProvider(provider: string): void {
   validateProvider(provider);
   const path = configPath();
+  const config = readConfig();
   mkdirSync(dirname(path), { recursive: true });
-  writeFileSync(path, `${JSON.stringify({ defaultProvider: provider }, null, 2)}\n`, 'utf8');
+  writeFileSync(
+    path,
+    `${JSON.stringify({ ...config, schemaVersion: 1, defaultProvider: provider }, null, 2)}\n`,
+    'utf8',
+  );
 }
 
 function clearDefaultProvider(): void {
-  try {
-    unlinkSync(configPath());
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== 'ENOENT')
-      throw new Error('Unable to clear llmchat configuration.');
-  }
+  const path = configPath();
+  const config = readConfig();
+  if (!Object.prototype.hasOwnProperty.call(config, 'defaultProvider')) return;
+  delete config.defaultProvider;
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, `${JSON.stringify({ ...config, schemaVersion: 1 }, null, 2)}\n`, 'utf8');
 }
 
 function main(): void {
