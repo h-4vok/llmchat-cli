@@ -23,4 +23,4 @@ For a batch, create `integration/<identifier>` from `staging`, associate each is
 
 ## Configuration and extensions
 
-`loop.config.json` configures the Worker, Staff, and QA role commands, required PR check names, polling timeouts, Worker lease, and review-round limit. `npm test`, build, and format belong in `.github/workflows/pr-checks.yml`, not in this configuration. State may be migrated to a remote store and commands may use API adapters in the future without changing the gating policy.
+`loop.config.json` configures the Worker, Staff, and QA role commands, required PR check names, polling timeouts, Worker lease, review-round limit, and the Codex sandbox used by automated roles. Automated local roles default to `danger-full-access` because they must commit, push, and publish GitHub evidence; this is scoped to the configured checkout and should only be used in a trusted automation environment. `npm test`, build, and format belong in `.github/workflows/pr-checks.yml`, not in this configuration. State may be migrated to a remote store and commands may use API adapters in the future without changing the gating policy.

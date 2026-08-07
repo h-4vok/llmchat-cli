@@ -94,6 +94,7 @@ type Config = {
   evidenceTimeoutMs?: number;
   workerLeaseMs?: number;
   maxReviewRounds?: number;
+  codexSandbox?: 'read-only' | 'workspace-write' | 'danger-full-access';
   lockTtlMs?: number;
 };
 type Issue = { number: number; title: string; body?: string };
@@ -377,6 +378,23 @@ function rolePrompt(
   return `Use the staff-reviewer skill for GitHub issue #${issue.number}: ${issue.title}. Review PR #${pr} against staging after QA has passed. Current head is ${headSha ?? 'unknown'} and this is review round ${round}. Perform the independent adversarial review for design, security, regressions, boundaries, and abuse cases. Publish directly to the PR exactly one review beginning [Staff Review] round=${round} verdict=approved or changes_requested, include S<n> findings when needed, and include commit=${headSha ?? 'current'}. Do not edit code or merge. Exit 0 after publishing the review; do not return JSON. Issue body:\n${issueContext}`;
 }
 
+function roleCommand(value: Command | undefined, issue: number, cfg: Config): Spec | undefined {
+  const spec = command(value, issue);
+  if (!spec) return undefined;
+  if (
+    /^(?:.*[\\/])?codex(?:\.cmd)?$/i.test(spec.command) &&
+    spec.args[0] === 'exec' &&
+    !spec.args.includes('--dangerously-bypass-approvals-and-sandbox') &&
+    !spec.args.includes('--sandbox')
+  ) {
+    return {
+      ...spec,
+      args: [...spec.args, '--sandbox', cfg.codexSandbox ?? 'danger-full-access'],
+    };
+  }
+  return spec;
+}
+
 function workerMetadata(output: string, knownPr?: number): { pr?: number; base?: string } {
   const match = output.match(/^\s*WORKER_RESULT\s+pr=(\d+)\s+base=([^\s]+)\s*$/im);
   if (match) return { pr: Number(match[1]), base: match[2] };
@@ -573,7 +591,7 @@ async function runWorker(
     reviewRound: round,
     lastError: undefined,
   });
-  const spec = command(cfg.workerCommand, issue.number);
+  const spec = roleCommand(cfg.workerCommand, issue.number, cfg);
   if (!spec) throw new Error('workerCommand is required');
   const output = await d.run(
     withWorkerLifecycle(
@@ -632,7 +650,7 @@ async function runReview(
   else status(d, issue.number, pending, { pr: prNumber, headSha: evidence.headRefOid });
   const configured = role === 'qa' ? cfg.qaCommand : cfg.staffReviewCommand;
   if (!configured) throw new Error(`${role} command is required`);
-  const spec = command(configured, issue.number);
+  const spec = roleCommand(configured, issue.number, cfg);
   if (!spec) throw new Error(`${role} command is required`);
   await d.run({
     ...spec,
