@@ -70,7 +70,7 @@ function parseChat(args: string[]): {
     if (args[i] === '--help' || args[i] === '-h') return { help: true };
     if (args[i] === '--provider') {
       provider = args[++i];
-      if (!provider) throw new Error('--provider requires a value.');
+      if (!provider || provider.startsWith('--')) throw new Error('--provider requires a value.');
     } else if (['--gem', '--gpt', '--system-instructions'].includes(args[i])) {
       const flag = args[i];
       if (systemInstructionsFlag)
@@ -79,7 +79,8 @@ function parseChat(args: string[]): {
         );
       systemInstructionsFlag = flag;
       systemInstructions = args[++i];
-      if (!systemInstructions) throw new Error(`${flag} requires a value.`);
+      if (!systemInstructions || systemInstructions.startsWith('--'))
+        throw new Error(`${flag} requires a value.`);
     } else if (args[i].startsWith('--')) {
       throw new Error(`Unknown option "${args[i]}".`);
     } else promptParts.push(args[i]);

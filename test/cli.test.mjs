@@ -74,6 +74,9 @@ test('system-instructions aliases require one value and reject conflicts', () =>
   const missing = run(configHome, 'chat', '--provider', 'gemini', '--gem');
   assert.notEqual(missing.status, 0);
   assert.match(missing.stderr, /--gem requires a value/);
+  const missingBeforeOption = run(configHome, 'chat', '--gem', '--provider', 'gemini', 'hello');
+  assert.notEqual(missingBeforeOption.status, 0);
+  assert.match(missingBeforeOption.stderr, /--gem requires a value/);
   const conflict = run(
     configHome,
     'chat',
@@ -87,4 +90,16 @@ test('system-instructions aliases require one value and reject conflicts', () =>
   );
   assert.notEqual(conflict.status, 0);
   assert.match(conflict.stderr, /Conflicting options/);
+});
+
+test('system-instructions aliases are documented and omitted selection is unchanged', () => {
+  const configHome = mkdtempSync(join(tmpdir(), 'llmchat-cli-'));
+  const help = run(configHome, 'chat', '--help');
+  assert.equal(help.status, 0);
+  assert.match(help.stdout, /--gem/);
+  assert.match(help.stdout, /--gpt/);
+  assert.match(help.stdout, /--system-instructions/);
+  const withoutSelection = run(configHome, 'chat', '--provider', 'gemini', 'hello');
+  assert.equal(withoutSelection.status, 0);
+  assert.doesNotMatch(withoutSelection.stdout, /using system instructions/);
 });
