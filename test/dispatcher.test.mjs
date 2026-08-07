@@ -231,6 +231,45 @@ test('new branch preparation refuses to overwrite an existing worker branch', ()
   rmSync(remote, { recursive: true, force: true });
 });
 
+test('new branch preparation uses staging updated by fetch', () => {
+  const seed = mkdtempSync(join(tmpdir(), 'llmchat-seed-'));
+  const remote = mkdtempSync(join(tmpdir(), 'llmchat-remote-'));
+  const work = mkdtempSync(join(tmpdir(), 'llmchat-work-'));
+  const runGit = (cwd, args) => {
+    const result = spawnSync('git', args, { cwd, encoding: 'utf8' });
+    assert.equal(result.status, 0, result.stderr);
+    return result.stdout.trim();
+  };
+  try {
+    runGit(seed, ['init', '-b', 'staging']);
+    runGit(seed, ['config', 'user.email', 'test@example.com']);
+    runGit(seed, ['config', 'user.name', 'Test']);
+    writeFileSync(join(seed, 'README.md'), 'initial');
+    runGit(seed, ['add', 'README.md']);
+    runGit(seed, ['commit', '-m', 'initial']);
+    const remoteResult = spawnSync('git', ['init', '--bare', remote], { encoding: 'utf8' });
+    assert.equal(remoteResult.status, 0, remoteResult.stderr);
+    runGit(seed, ['remote', 'add', 'origin', remote]);
+    runGit(seed, ['push', 'origin', 'staging']);
+    runGit(work, ['clone', remote, '.']);
+    writeFileSync(join(seed, 'README.md'), 'updated staging');
+    runGit(seed, ['add', 'README.md']);
+    runGit(seed, ['commit', '-m', 'advance staging']);
+    const updatedStagingSha = runGit(seed, ['rev-parse', 'HEAD']);
+    runGit(seed, ['push', 'origin', 'staging']);
+
+    const prepared = prepareWorkerBranch(16, work);
+
+    assert.equal(prepared.branch, 'codex/issue-16');
+    assert.equal(prepared.stagingBaseSha, updatedStagingSha);
+    assert.equal(runGit(work, ['rev-parse', 'codex/issue-16']), updatedStagingSha);
+  } finally {
+    rmSync(seed, { recursive: true, force: true });
+    rmSync(remote, { recursive: true, force: true });
+    rmSync(work, { recursive: true, force: true });
+  }
+});
+
 test('dispatcher rejects a PR whose worker branch violates the convention', async () => {
   const h = harness([{ number: 1, title: 'branch validation' }], {
     headRefName: 'codex/other-branch',
