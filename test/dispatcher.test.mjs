@@ -160,6 +160,8 @@ function harness(
   let staffCount = 0;
   const qaVerdicts = overrides.qaVerdicts ?? ['passed'];
   const staffVerdicts = overrides.staffVerdicts ?? ['approved'];
+  const qaBodies = overrides.qaBodies;
+  const staffBodies = overrides.staffBodies;
   const publishEvidence = {
     worker: true,
     qa: true,
@@ -221,7 +223,9 @@ function harness(
         const verdict = qaVerdicts[qaCount - 1] ?? qaVerdicts.at(-1);
         if (publishEvidence.qa)
           reviews.push({
-            body: `[QA/SDET Review] round=${round} verdict=${verdict} commit=${pr.headRefOid}`,
+            body:
+              qaBodies?.[qaCount - 1] ??
+              `[QA/SDET Review] round=${round} verdict=${verdict} commit=${pr.headRefOid}`,
             commitId: pr.headRefOid,
             submittedAt: `${qaCount}`,
           });
@@ -232,7 +236,9 @@ function harness(
         const verdict = staffVerdicts[staffCount - 1] ?? staffVerdicts.at(-1);
         if (publishEvidence.staff)
           reviews.push({
-            body: `[Staff Review] round=${round} verdict=${verdict} commit=${pr.headRefOid}`,
+            body:
+              staffBodies?.[staffCount - 1] ??
+              `[Staff Review] round=${round} verdict=${verdict} commit=${pr.headRefOid}`,
             commitId: pr.headRefOid,
             submittedAt: `${staffCount}`,
           });
@@ -666,6 +672,77 @@ test('new branch preparation failure is persisted and does not leave a claimed r
   assert.equal(h.state().status, 'blocked');
   assert.match(h.state().lastError, /The loop stopped during blocked/);
   assert.equal(h.state().lastErrorVerbose, 'fetch failed');
+});
+
+function assertPersistedDiagnostic(state, phase, diagnostic, context) {
+  assert.ok((state.lastError.match(/[.!?]+/g) ?? []).length <= 4, state.lastError);
+  assert.match(state.lastError, new RegExp(`during ${phase}`));
+  for (const value of context) assert.match(state.lastError, value);
+  assert.equal(state.lastErrorVerbose, diagnostic);
+}
+
+test('empty diagnostic fallback persists concise blocked context separately from verbose output', async () => {
+  const h = harness([{ number: 1, title: 'a' }]);
+  h.deps.prepareWorkerBranch = () => {
+    throw new Error('');
+  };
+  await dispatch(h.cfg, h.deps);
+  assertPersistedDiagnostic(
+    h.state(),
+    'blocked',
+    'No diagnostic output was captured during blocked.',
+    [/issue #1/],
+  );
+  assert.match(h.state().lastError, /No diagnostic output was available/);
+});
+
+test('QA feedback persists concise context and the complete diagnostic', async () => {
+  const diagnostic =
+    '[QA/SDET Review] round=1 verdict=changes_requested commit=abc1\n[Q1] fail - café output';
+  const h = harness([{ number: 1, title: 'a' }], {
+    qaVerdicts: ['changes_requested', 'passed'],
+    qaBodies: [diagnostic],
+  });
+  await dispatch(h.cfg, h.deps);
+  const persisted = h.saves.find((state) => state.status === 'qa_changes_requested');
+  assertPersistedDiagnostic(persisted, 'qa changes requested', diagnostic, [/issue #1/, /PR #14/]);
+});
+
+test('Staff feedback persists concise context and the complete diagnostic', async () => {
+  const diagnostic =
+    '[Staff Review] round=1 verdict=changes_requested commit=abc1\n[S1] high - reproducible output';
+  const h = harness([{ number: 1, title: 'a' }], {
+    staffVerdicts: ['changes_requested', 'approved'],
+    staffBodies: [diagnostic],
+  });
+  await dispatch(h.cfg, h.deps);
+  const persisted = h.saves.find((state) => state.status === 'staff_changes_requested');
+  assertPersistedDiagnostic(persisted, 'staff changes requested', diagnostic, [
+    /issue #1/,
+    /PR #14/,
+  ]);
+});
+
+test('recovery failure persists concise issue and PR context with complete diagnostics', async () => {
+  const h = harness([{ number: 1, title: 'a' }], {
+    initialState: prepareRecovery(
+      { completedIssues: [1], branch: 'codex/issue-1' },
+      1,
+      14,
+      Date.now(),
+      100,
+    ),
+  });
+  h.deps.checkoutWorkerBranch = () => {
+    throw new Error('recovery checkout failed\nexit 2');
+  };
+  await dispatch(h.cfg, h.deps);
+  assertPersistedDiagnostic(
+    h.state(),
+    'worker recovery pending',
+    'recovery checkout failed\nexit 2',
+    [/issue #1/, /PR #14/],
+  );
 });
 
 test('blocked issue with PR context enters recovery instead of a fresh claim', async () => {
