@@ -125,6 +125,10 @@ const baseConfig = {
   maxReviewRounds: 5,
 };
 
+function existingHumanReviewGuide(commit = 'abc1') {
+  return `[Human Review Guide] round=1 commit=${commit}\n<!-- llmchat-dispatcher-human-review-guide -->\n\nSummary\nExercise the CLI change.\n\nSteps\n1. Run the focused command in a temporary directory.\n\nExpected results\n- The documented output appears.\n\nIsolation\nUse a temporary checkout and no credentials.\n\nLimitations / diagnostics\n- A failed command indicates the change is not ready.\n\nApproval checklist\n- [ ] Behavior matches the acceptance criteria.`;
+}
+
 function harness(
   issues = [{ number: 1, title: 'one', body: 'acceptance criteria' }],
   overrides = {},
@@ -161,6 +165,11 @@ function harness(
     staff: true,
     ...(overrides.publishEvidence ?? {}),
   };
+  const humanVerification = overrides.humanVerification ?? true;
+  for (let guide = 0; guide < (overrides.existingHumanGuides ?? 0); guide += 1)
+    pr.comments.push({ body: existingHumanReviewGuide() });
+  if (overrides.malformedHumanGuide)
+    pr.comments.push({ body: '[Human Review Guide] round=1 commit=abc1\n\nSummary\nInjected.' });
   const checkSequences = overrides.checkSequences ?? [pr.statusCheckRollup];
   let checkIndex = 0;
 
@@ -195,11 +204,15 @@ function harness(
         }
         spec.onStart?.(1000 + workerCount);
         spec.onHeartbeat?.();
-        if (publishEvidence.worker)
+        if (publishEvidence.worker) {
+          const verification = humanVerification
+            ? `\n\n[Human Verification]\n\`\`\`json\n${JSON.stringify({ summary: 'Exercise the CLI change.', steps: ['Run the focused command in a temporary directory.'], expected: ['The documented output appears.'], isolation: 'Use a temporary checkout and no credentials.', limitations: ['A failed command indicates the change is not ready.'], checklist: ['Behavior matches the acceptance criteria.'] })}\n\`\`\``
+            : '';
           pr.comments.push({
-            body: `[Worker] round=${round} status=ready_for_review pr=${pr.number} base=staging commit=${pr.headRefOid}`,
+            body: `[Worker] round=${round} status=ready_for_review pr=${pr.number} base=staging commit=${pr.headRefOid}${verification}`,
             createdAt: `${workerCount}`,
           });
+        }
         return `WORKER_RESULT pr=${pr.number} base=staging`;
       }
       if (role === 'qa') {
@@ -312,8 +325,41 @@ test('dispatcher runs Worker, QA, then Staff and uses PR evidence instead of JSO
   assert.equal(h.runs[0].env.LLMCHAT_ISSUE_NUMBER, '1');
   assert.equal(h.reviews[0].body.startsWith('[QA/SDET Review]'), true);
   assert.equal(h.reviews[1].body.startsWith('[Staff Review]'), true);
+  const guide = h.comments.find(([, body]) => body.startsWith('[Human Review Guide]'))?.[1] ?? '';
+  assert.match(guide, /commit=abc1/);
+  assert.match(guide, /Isolation/);
+  assert.match(guide, /Approval checklist/);
   assert.equal(h.state().branch, 'codex/issue-1');
   assert.equal(h.state().stagingBaseSha, 'staging-sha-1');
+});
+
+test('existing human guide for the current commit is not published twice', async () => {
+  const h = harness(undefined, { existingHumanGuides: 1 });
+  await dispatch(h.cfg, h.deps);
+  assert.equal(h.comments.filter(([, body]) => body.startsWith('[Human Review Guide]')).length, 0);
+});
+
+test('duplicate human guides for the current commit block ready_for_human_merge', async () => {
+  const h = harness(undefined, { existingHumanGuides: 2 });
+  await dispatch(h.cfg, h.deps);
+  assert.equal(h.state().status, 'worker_recovery_pending');
+  assert.match(h.state().lastError, /Expected exactly one \[Human Review Guide\].*duplicates/);
+  assert.equal(h.comments.filter(([, body]) => body.startsWith('[Human Review Guide]')).length, 0);
+});
+
+test('malformed current human guide blocks ready_for_human_merge', async () => {
+  const h = harness(undefined, { malformedHumanGuide: true });
+  await dispatch(h.cfg, h.deps);
+  assert.equal(h.state().status, 'worker_recovery_pending');
+  assert.match(h.state().lastError, /not dispatcher-rendered/);
+  assert.equal(h.comments.filter(([, body]) => body.startsWith('[Human Review Guide]')).length, 0);
+});
+
+test('incomplete Worker human-verification evidence blocks before ready_for_human_merge', async () => {
+  const h = harness(undefined, { humanVerification: false });
+  await dispatch(h.cfg, h.deps);
+  assert.equal(h.state().status, 'worker_recovery_pending');
+  assert.match(h.state().lastError, /complete \[Human Verification\] guide/);
 });
 
 test('create and recovery smoke paths capture the persisted claimed-issue PR body', async () => {
