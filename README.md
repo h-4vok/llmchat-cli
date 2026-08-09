@@ -43,6 +43,8 @@ This repository contains the skeleton and the first end-to-end Gemini route. Ope
 
 The canonical specification is [issue #13](https://github.com/h-4vok/llmchat-cli/issues/13). Run the manual dispatcher with `npm run sloop -- --list`, `npm run sloop -- --status`, or `npm run sloop`. Copy `sloop.config.json.example` to `sloop.config.json` to configure worker/review/QA commands. Local state is stored in `.llmchat/state.json` and is never committed.
 
+When a loop step fails, `lastError` contains a concise explanation suitable for normal status output (and remains the compatibility field for older state files). `lastErrorVerbose` retains the complete captured diagnostic, including process output and exit context. Use `npm run loop -- --status` for the concise view, or `npm run loop -- --status --verbose` when diagnosing a failure; the verbose field is intentionally omitted from the default command.
+
 The flow is deliberately sequential: `Automation Ready` label → visible claim → Worker → PR CI → QA/SDET → Staff/adversarial review → ready for human merge. QA runs before Staff, and every Worker revision repeats QA before Staff. `npm test`, build, and format are PR checks in GitHub Actions; the dispatcher only polls their status. There is no automatic merge to `main`, no worktrees, and no parallelism.
 
 If the Worker process disappears, the dispatcher detects the stale lease, reconstructs context from local state and the existing PR, and starts a replacement Worker. To prepare a recovery test for an existing PR without changing its code, run `npm run sloop -- --prepare-recovery 1 --pr <number>` and then run `npm run sloop` normally.

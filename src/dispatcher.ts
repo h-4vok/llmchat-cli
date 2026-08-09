@@ -45,7 +45,10 @@ export type State = {
   reviewRound?: number;
   attempt?: number;
   stagingGreen?: boolean;
+  /** Concise, human-readable compatibility alias for the most recent failure. */
   lastError?: string;
+  /** Complete process or review diagnostic; hidden by default from --status. */
+  lastErrorVerbose?: string;
   lastCiFeedback?: string;
   lastQaFeedback?: string;
   lastStaffFeedback?: string;
@@ -477,7 +480,7 @@ export function runCommand(spec: Spec | undefined): Promise<string> {
         else
           reject(
             new Error(
-              `${spec.command} failed after ${spec.retries + 1} attempt(s): exit ${code}${err.trim() ? `: ${err.trim()}` : ''}`,
+              `${spec.command} failed after ${spec.retries + 1} attempt(s): exit ${code}\nstdout:\n${out}\nstderr:\n${err}`,
             ),
           );
       });
@@ -525,12 +528,49 @@ function skillFor(status: Status | undefined): string {
 }
 
 function status(d: Deps, issue: number, next: Status, extra: Partial<State> = {}): void {
-  d.save({ ...d.load(), issue, status: next, updatedAt: d.now(), ...extra });
+  const current = d.load();
+  const diagnostic =
+    extra.lastError ??
+    (['ci_failed', 'qa_changes_requested', 'staff_changes_requested'].includes(next)
+      ? (extra.lastCiFeedback ?? extra.lastQaFeedback ?? extra.lastStaffFeedback)
+      : undefined);
+  const errorFields = diagnostic ? normalizedError(next, diagnostic, current) : {};
+  d.save({ ...current, issue, status: next, updatedAt: d.now(), ...extra, ...errorFields });
   console.error(`[sloop] issue #${issue}: ${next}`);
   d.comment(
     issue,
     `Sloop engineering v2: estado ${next}. Skill activa: ${skillFor(next)}. QA precede a Staff; no se hace merge automático.`,
   );
+}
+
+function normalizedError(
+  phase: Status,
+  diagnostic: unknown,
+  state: State,
+): Pick<State, 'lastError' | 'lastErrorVerbose'> {
+  const verbose = String(diagnostic ?? '');
+  const firstDetail = verbose
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .find(Boolean);
+  const context = [
+    state.issue ? `issue #${state.issue}` : undefined,
+    state.pr ? `PR #${state.pr}` : undefined,
+  ]
+    .filter(Boolean)
+    .join(', ');
+  const subject = context ? ` for ${context}` : '';
+  const detail = firstDetail
+    ? ` Observed detail: ${firstDetail
+        .replace(/[.!?]+/g, ',')
+        .replace(/\s+/g, ' ')
+        .slice(0, 400)}`
+    : ' No diagnostic output was available.';
+  return {
+    lastError: `The loop stopped during ${phase.replaceAll('_', ' ')}${subject}.${detail} See verbose diagnostics for the complete output.`,
+    lastErrorVerbose:
+      verbose || `No diagnostic output was captured during ${phase.replaceAll('_', ' ')}.`,
+  };
 }
 
 function claimNewIssue(d: Deps, issue: number): void {
@@ -870,6 +910,7 @@ async function runWorker(
     workerRecoveryCount: (d.load().workerRecoveryCount ?? 0) + 1,
     reviewRound: round,
     lastError: undefined,
+    lastErrorVerbose: undefined,
   });
   const spec = roleCommand(cfg.workerCommand, issue.number, cfg);
   if (!spec) throw new Error('workerCommand is required');
@@ -1165,6 +1206,7 @@ export function prepareRecovery(
     reviewRound: state.reviewRound ?? 1,
     completedIssues: (state.completedIssues ?? []).filter((number) => number !== issue),
     lastError: undefined,
+    lastErrorVerbose: undefined,
     drainStatus: 'running',
     updatedAt: now,
   };
@@ -1341,6 +1383,7 @@ function resolveReviewCap(args: string[], cfg: Config): void {
     reviewCap: cap,
     status: additionalRounds > 0 ? 'worker_recovery_pending' : 'ready_for_human_merge',
     lastError: undefined,
+    lastErrorVerbose: undefined,
     updatedAt: Date.now(),
   };
   writeState(next);
@@ -1524,9 +1567,14 @@ export async function dispatch(cfg: Config, d: Deps): Promise<void> {
 async function main() {
   const args = process.argv.slice(2);
   if (args.includes('--status')) {
-    console.log(JSON.stringify(readState(), null, 2));
+    const current = readState();
+    const displayed = args.includes('--verbose')
+      ? current
+      : Object.fromEntries(Object.entries(current).filter(([key]) => key !== 'lastErrorVerbose'));
+    console.log(JSON.stringify(displayed, null, 2));
     return;
   }
+  if (args.includes('--verbose')) throw new Error('--verbose is supported only with --status');
   const cfg: Config = existsSync(join(root, 'sloop.config.json'))
     ? JSON.parse(readFileSync(join(root, 'sloop.config.json'), 'utf8'))
     : {};

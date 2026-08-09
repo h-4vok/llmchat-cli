@@ -606,6 +606,9 @@ test('new issue claim clears the completed issue PR context before validation', 
 test('QA changes return to Worker and QA is repeated before Staff', async () => {
   const h = harness([{ number: 1, title: 'a' }], { qaVerdicts: ['changes_requested', 'passed'] });
   await dispatch(h.cfg, h.deps);
+  const failure = h.saves.find((saved) => saved.status === 'qa_changes_requested');
+  assert.match(failure.lastError, /qa changes requested/);
+  assert.match(failure.lastErrorVerbose, /\[QA\/SDET Review\]/);
   assert.equal(h.state().status, 'ready_for_human_merge');
   assert.deepEqual(h.counts(), { workerCount: 2, qaCount: 2, staffCount: 1 });
   assert.deepEqual(
@@ -619,6 +622,9 @@ test('Staff changes return to Worker and force QA before Staff re-review', async
     staffVerdicts: ['changes_requested', 'approved'],
   });
   await dispatch(h.cfg, h.deps);
+  const failure = h.saves.find((saved) => saved.status === 'staff_changes_requested');
+  assert.match(failure.lastError, /staff changes requested/);
+  assert.match(failure.lastErrorVerbose, /\[Staff Review\]/);
   assert.equal(h.state().status, 'ready_for_human_merge');
   assert.deepEqual(h.counts(), { workerCount: 2, qaCount: 2, staffCount: 2 });
   assert.deepEqual(
@@ -663,7 +669,9 @@ test('new branch preparation failure is persisted and does not leave a claimed r
   };
   await dispatch(h.cfg, h.deps);
   assert.equal(h.state().status, 'blocked');
-  assert.equal(h.state().lastError, 'fetch failed');
+  assert.match(h.state().lastError, /The loop stopped during blocked/);
+  assert.match(h.state().lastError, /fetch failed/);
+  assert.equal(h.state().lastErrorVerbose, 'fetch failed');
 });
 
 test('blocked issue with PR context enters recovery instead of a fresh claim', async () => {
@@ -726,6 +734,9 @@ test('failed PR CI returns the issue to a recovered Worker without local npm gat
     ],
   });
   await dispatch(h.cfg, h.deps);
+  const failure = h.saves.find((saved) => saved.status === 'ci_failed');
+  assert.match(failure.lastError, /ci failed/);
+  assert.match(failure.lastErrorVerbose, /\[CI\] pr-checks: FAILURE/);
   assert.equal(h.state().status, 'ready_for_human_merge');
   assert.equal(h.counts().workerCount, 2);
   assert.equal(
@@ -781,6 +792,36 @@ test('status remains observable while an active task is stored', () => {
   );
   assert.equal(status.status, 0);
   assert.match(status.stdout, /worker_running/);
+});
+
+test('status hides verbose diagnostics unless explicitly requested', () => {
+  const h = harness();
+  mkdirSync(join(h.root, '.llmchat'), { recursive: true });
+  const diagnostic = 'worker failed\nstdout: café\nstderr: "quoted"';
+  writeFileSync(
+    join(h.root, '.llmchat', 'state.json'),
+    JSON.stringify({
+      status: 'blocked',
+      lastError: 'Concise failure summary.',
+      lastErrorVerbose: diagnostic,
+    }),
+  );
+  const dispatcher = join(process.cwd(), 'dist', 'dispatcher.js');
+  const concise = spawnSync(process.execPath, [dispatcher, '--status'], {
+    cwd: h.root,
+    encoding: 'utf8',
+  });
+  const verbose = spawnSync(process.execPath, [dispatcher, '--status', '--verbose'], {
+    cwd: h.root,
+    encoding: 'utf8',
+  });
+  assert.equal(concise.status, 0, concise.stderr);
+  assert.equal(verbose.status, 0, verbose.stderr);
+  assert.equal(concise.stdout.includes('lastErrorVerbose'), false);
+  assert.equal(concise.stdout.includes('stdout: café'), false);
+  assert.equal(verbose.stdout.includes('lastErrorVerbose'), true);
+  assert.equal(verbose.stdout.includes('stdout: café'), true);
+  assert.equal(JSON.parse(verbose.stdout).lastErrorVerbose, diagnostic);
 });
 
 test('prepareRecovery preserves PR and removes only the issue from completion', () => {
