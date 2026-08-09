@@ -240,15 +240,64 @@ function resolveExecutable(commandName: string): string {
   }
 }
 
-function gh(args: string[]): string {
-  const executable = resolveExecutable('gh');
-  const useWindowsShell = process.platform === 'win32' && /\.(cmd|bat)$/i.test(executable);
-  return execFileSync(useWindowsShell ? 'gh' : executable, args, {
+export function childProcessInvocation(
+  executable: string,
+  args: string[],
+  platform = process.platform,
+  commandProcessor = process.env.ComSpec,
+): { command: string; args: string[]; windowsVerbatimArguments?: boolean } {
+  if (platform === 'win32' && /\.(cmd|bat)$/i.test(executable)) {
+    // cmd.exe must parse batch files, so never pass arbitrary argv entries to
+    // its command parser. The dispatcher only needs fixed CLI flags for batch
+    // shims; reject syntax that could change the command before spawning it.
+    const unsafe = /["%&|<>()^!\r\n]/;
+    if (unsafe.test(executable) || args.some((arg) => unsafe.test(arg)))
+      throw new Error('Windows batch command contains unsafe cmd.exe syntax');
+    return {
+      command: commandProcessor || 'cmd.exe',
+      args: [
+        '/d',
+        '/s',
+        '/v:off',
+        '/c',
+        `""${executable}" ${args.map((arg) => `"${arg}"`).join(' ')}"`,
+      ],
+      windowsVerbatimArguments: true,
+    };
+  }
+  return { command: executable, args };
+}
+
+type SyncCommandExecutor = (
+  command: string,
+  args: string[],
+  options: {
+    cwd: string;
+    encoding: 'utf8';
+    stdio: ['ignore', 'pipe', 'pipe'];
+    windowsVerbatimArguments?: boolean;
+  },
+) => string;
+
+export function runSyncCommand(
+  executable: string,
+  args: string[],
+  execute: SyncCommandExecutor = (command, commandArgs, options) =>
+    execFileSync(command, commandArgs, options) as string,
+  platform = process.platform,
+  commandProcessor = process.env.ComSpec,
+): string {
+  const launch = childProcessInvocation(executable, args, platform, commandProcessor);
+  return execute(launch.command, launch.args, {
     cwd: root,
     encoding: 'utf8',
-    shell: useWindowsShell,
     stdio: ['ignore', 'pipe', 'pipe'],
+    windowsVerbatimArguments: launch.windowsVerbatimArguments,
   }).trim();
+}
+
+function gh(args: string[]): string {
+  return runSyncCommand(resolveExecutable('gh'), args);
 }
 
 function ghJson<T>(args: string[]): T {
@@ -385,18 +434,17 @@ export function command(
 export function runCommand(spec: Spec | undefined): Promise<string> {
   if (!spec) return Promise.resolve('');
   const executable = resolveExecutable(spec.command);
-  const useWindowsShell = process.platform === 'win32' && /\.(cmd|bat)$/i.test(executable);
-  const launchExecutable = useWindowsShell ? spec.command : executable;
+  const launch = childProcessInvocation(executable, spec.args);
   const attempt = (n: number): Promise<string> =>
     new Promise((resolve, reject) => {
       console.error(
         `[sloop] ejecutando (${n + 1}/${spec.retries + 1}): ${spec.command} ${spec.args.join(' ')}`,
       );
-      const child = spawn(launchExecutable, spec.args, {
+      const child = spawn(launch.command, launch.args, {
         cwd: root,
         windowsHide: true,
-        shell: useWindowsShell,
         env: spec.env ? { ...process.env, ...spec.env } : process.env,
+        windowsVerbatimArguments: launch.windowsVerbatimArguments,
       });
       spec.onStart?.(child.pid ?? -1);
       const heartbeat = () => spec.onHeartbeat?.();
