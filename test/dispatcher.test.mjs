@@ -952,6 +952,17 @@ test('diagnostic redaction removes complete Authorization header values', () => 
   assert.match(output, /https:\/\/example\.test\/log/);
 });
 
+test('diagnostic redaction removes URL userinfo and complete cookie header values', () => {
+  const output = redactDiagnostic(
+    'https://alice:supersecret@example.test/log\nCookie: session=one; csrf=two\nSet-Cookie: session=three; HttpOnly\nhttps://example.test/safe',
+  );
+  assert.match(output, /https:\/\/\[REDACTED\]@example\.test\/log/);
+  assert.match(output, /Cookie: \[REDACTED\]/);
+  assert.match(output, /Set-Cookie: \[REDACTED\]/);
+  assert.match(output, /https:\/\/example\.test\/safe/);
+  assert.doesNotMatch(output, /alice|supersecret|session=one|csrf=two|session=three/);
+});
+
 test('legacy lastError-only state remains readable in both status modes', () => {
   const h = harness();
   mkdirSync(join(h.root, '.llmchat'), { recursive: true });
