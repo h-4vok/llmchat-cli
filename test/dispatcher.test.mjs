@@ -13,6 +13,7 @@ import {
   prepareWorkerBranch,
   prepareRecovery,
   recoverStaleLock,
+  runSyncCommand,
   workerBranchName,
   withIssueClosingReference,
   resetRunState,
@@ -69,6 +70,38 @@ test('Windows batch commands reject cmd.exe syntax in argv before launch', () =>
       ),
     /unsafe cmd\.exe syntax/,
   );
+});
+
+test('synchronous Windows batch shims preserve verbatim cmd.exe command text', () => {
+  let invocation;
+  const output = runSyncCommand(
+    'C:\\Program Files\\GitHub CLI\\gh.cmd',
+    ['pr', 'view', '40'],
+    (command, args, options) => {
+      invocation = { command, args, options };
+      return 'ok';
+    },
+    'win32',
+    'C:\\Windows\\System32\\cmd.exe',
+  );
+
+  assert.equal(output, 'ok');
+  assert.deepEqual(invocation, {
+    command: 'C:\\Windows\\System32\\cmd.exe',
+    args: [
+      '/d',
+      '/s',
+      '/v:off',
+      '/c',
+      '""C:\\Program Files\\GitHub CLI\\gh.cmd" "pr" "view" "40""',
+    ],
+    options: {
+      cwd: process.cwd(),
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+      windowsVerbatimArguments: true,
+    },
+  });
 });
 
 test('non-batch commands preserve their executable and arguments', () => {

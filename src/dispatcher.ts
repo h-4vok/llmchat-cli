@@ -268,14 +268,36 @@ export function childProcessInvocation(
   return { command: executable, args };
 }
 
-function gh(args: string[]): string {
-  const executable = resolveExecutable('gh');
-  const launch = childProcessInvocation(executable, args);
-  return execFileSync(launch.command, launch.args, {
+type SyncCommandExecutor = (
+  command: string,
+  args: string[],
+  options: {
+    cwd: string;
+    encoding: 'utf8';
+    stdio: ['ignore', 'pipe', 'pipe'];
+    windowsVerbatimArguments?: boolean;
+  },
+) => string;
+
+export function runSyncCommand(
+  executable: string,
+  args: string[],
+  execute: SyncCommandExecutor = (command, commandArgs, options) =>
+    execFileSync(command, commandArgs, options) as string,
+  platform = process.platform,
+  commandProcessor = process.env.ComSpec,
+): string {
+  const launch = childProcessInvocation(executable, args, platform, commandProcessor);
+  return execute(launch.command, launch.args, {
     cwd: root,
     encoding: 'utf8',
     stdio: ['ignore', 'pipe', 'pipe'],
+    windowsVerbatimArguments: launch.windowsVerbatimArguments,
   }).trim();
+}
+
+function gh(args: string[]): string {
+  return runSyncCommand(resolveExecutable('gh'), args);
 }
 
 function ghJson<T>(args: string[]): T {
