@@ -716,9 +716,10 @@ function humanReviewGuide(comment: { body?: string } | undefined): HumanReviewGu
   try {
     const guide = JSON.parse(match[1]) as Partial<HumanReviewGuide>;
     const strings = (value: unknown) =>
-      Array.isArray(value) &&
-      value.length > 0 &&
-      value.every((item) => typeof item === 'string' && item.trim());
+      (typeof value === 'string' && value.trim()) ||
+      (Array.isArray(value) &&
+        value.length > 0 &&
+        value.every((item) => typeof item === 'string' && item.trim()));
     if (
       typeof guide.summary !== 'string' ||
       !guide.summary.trim() ||
@@ -730,7 +731,13 @@ function humanReviewGuide(comment: { body?: string } | undefined): HumanReviewGu
       !strings(guide.checklist)
     )
       return undefined;
-    return guide as HumanReviewGuide;
+    return {
+      ...guide,
+      steps: typeof guide.steps === 'string' ? [guide.steps] : guide.steps,
+      expected: typeof guide.expected === 'string' ? [guide.expected] : guide.expected,
+      limitations: typeof guide.limitations === 'string' ? [guide.limitations] : guide.limitations,
+      checklist: typeof guide.checklist === 'string' ? [guide.checklist] : guide.checklist,
+    } as HumanReviewGuide;
   } catch {
     return undefined;
   }
