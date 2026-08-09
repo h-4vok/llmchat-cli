@@ -1589,6 +1589,10 @@ export async function dispatch(cfg: Config, d: Deps): Promise<void> {
 async function main() {
   const args = process.argv.slice(2);
   if (args.includes('--status')) {
+    const supportedStatusArgs =
+      (args.length === 1 && args[0] === '--status') ||
+      (args.length === 2 && args.includes('--verbose'));
+    if (!supportedStatusArgs) throw new Error('--status accepts only the optional --verbose flag');
     const current = readState();
     const displayed = args.includes('--verbose')
       ? current

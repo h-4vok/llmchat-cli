@@ -946,6 +946,24 @@ test('status remains concise by default and returns exact verbose diagnostics on
   });
 });
 
+test('status rejects unsupported flag combinations', () => {
+  const h = harness();
+  for (const args of [
+    ['--status', '--list'],
+    ['--status', '--verbose', '--list'],
+    ['--status', '--unknown'],
+  ]) {
+    const result = spawnSync(
+      process.execPath,
+      [join(process.cwd(), 'dist', 'dispatcher.js'), ...args],
+      { cwd: h.root, encoding: 'utf8' },
+    );
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /--status accepts only the optional --verbose flag/);
+    assert.equal(result.stdout, '');
+  }
+});
+
 test('diagnostic redaction preserves safe multiline output and hides common credentials', () => {
   const output = redactDiagnostic(
     'exit 1\nGITHUB_TOKEN=secret-value\n{"password":"p@ss"}\nhttps://example.test/log',
