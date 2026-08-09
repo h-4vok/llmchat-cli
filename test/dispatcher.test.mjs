@@ -303,6 +303,30 @@ test('commands use argv, exit codes, retries, timeout and no shell contract', as
   );
 });
 
+test('failed commands preserve complete multiline stdout and stderr diagnostics', async () => {
+  await assert.rejects(
+    () =>
+      runCommand(
+        command(
+          {
+            command: 'node',
+            args: [
+              '-e',
+              "process.stdout.write('worker stdout one\\nworker stdout two\\n'); process.stderr.write('worker stderr one\\nworker stderr two\\n'); process.exit(17)",
+            ],
+          },
+          0,
+        ),
+      ),
+    (error) => {
+      assert.match(error.message, /exit 17/);
+      assert.match(error.message, /stdout:\nworker stdout one\nworker stdout two\n/);
+      assert.match(error.message, /stderr:\nworker stderr one\nworker stderr two\n/);
+      return true;
+    },
+  );
+});
+
 test('PR closing reference uses the claimed issue exactly once for creation and recovery', () => {
   assert.equal(withIssueClosingReference('Summary', 17), 'Summary\n\nCloses #17');
   assert.equal(

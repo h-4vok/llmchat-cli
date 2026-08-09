@@ -477,12 +477,16 @@ export function runCommand(spec: Spec | undefined): Promise<string> {
         clearTimeout(timer);
         if (code === 0) resolve(out.trim());
         else if (n < spec.retries) attempt(n + 1).then(resolve, reject);
-        else
-          reject(
-            new Error(
-              `${spec.command} failed after ${spec.retries + 1} attempt(s): exit ${code}${err.trim() ? `: ${err.trim()}` : ''}`,
-            ),
-          );
+        else {
+          const diagnostic = [
+            `${spec.command} failed after ${spec.retries + 1} attempt(s): exit ${code}`,
+            out ? `stdout:\n${out}` : '',
+            err ? `stderr:\n${err}` : '',
+          ]
+            .filter(Boolean)
+            .join('\n');
+          reject(new Error(diagnostic));
+        }
       });
     });
   return attempt(0);
