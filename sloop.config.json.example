@@ -1,8 +1,20 @@
 {
   "baseBranch": "staging",
-  "workerCommand": { "command": "codex", "args": ["exec"], "timeoutMs": 600000 },
-  "staffReviewCommand": { "command": "codex", "args": ["exec"], "timeoutMs": 600000 },
-  "qaCommand": { "command": "codex", "args": ["exec"], "timeoutMs": 600000 },
+  "workerCommand": {
+    "command": "codex",
+    "args": ["exec", "--sandbox", "danger-full-access"],
+    "timeoutMs": 600000
+  },
+  "staffReviewCommand": {
+    "command": "codex",
+    "args": ["exec", "--sandbox", "read-only"],
+    "timeoutMs": 600000
+  },
+  "qaCommand": {
+    "command": "codex",
+    "args": ["exec", "--sandbox", "read-only"],
+    "timeoutMs": 600000
+  },
   "requiredPrChecks": ["pr-checks"],
   "checkPollIntervalMs": 5000,
   "checkTimeoutMs": 900000,
@@ -10,6 +22,6 @@
   "evidenceTimeoutMs": 60000,
   "workerLeaseMs": 900000,
   "maxReviewRounds": 10,
-  "codexSandbox": "danger-full-access",
+  "logRoleInvocation": true,
   "lockTtlMs": 900000
 }

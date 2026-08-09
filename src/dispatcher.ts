@@ -109,8 +109,7 @@ export type PullRequest = {
   statusCheckRollup?: Check[];
 };
 
-type Command =
-  string[] | { command: string; args?: string[]; timeoutMs?: number; retries?: number };
+type Command = string[] | { command: string; args: string[]; timeoutMs?: number; retries?: number };
 type Config = {
   baseBranch?: string;
   workerCommand?: Command;
@@ -123,7 +122,7 @@ type Config = {
   evidenceTimeoutMs?: number;
   workerLeaseMs?: number;
   maxReviewRounds?: number;
-  codexSandbox?: 'read-only' | 'workspace-write' | 'danger-full-access';
+  logRoleInvocation?: boolean;
   lockTtlMs?: number;
 };
 type Issue = { number: number; title: string; body?: string };
@@ -153,6 +152,7 @@ type Spec = {
   retries: number;
   env?: NodeJS.ProcessEnv;
   input?: string;
+  logInvocation?: boolean;
   onStart?: (pid: number) => void;
   onHeartbeat?: () => void;
 };
@@ -428,9 +428,10 @@ export function command(
     );
   return {
     command: Array.isArray(value) ? value[0] : value.command,
-    args: Array.isArray(value) ? value.slice(1) : (value.args ?? []),
+    args: Array.isArray(value) ? value.slice(1) : value.args,
     timeoutMs: Array.isArray(value) ? 120000 : (value.timeoutMs ?? 120000),
     retries: Array.isArray(value) ? 0 : (value.retries ?? 0),
+    logInvocation: undefined,
   };
 }
 
@@ -441,7 +442,11 @@ export function runCommand(spec: Spec | undefined): Promise<string> {
   const attempt = (n: number, failedAttempts: string[] = []): Promise<string> =>
     new Promise((resolve, reject) => {
       console.error(
-        `[sloop] ejecutando (${n + 1}/${spec.retries + 1}): ${spec.command} ${spec.args.join(' ')}`,
+        ...(spec.logInvocation === false
+          ? []
+          : [
+              `[sloop] ejecutando (${n + 1}/${spec.retries + 1}): ${spec.command} ${spec.args.join(' ')}`,
+            ]),
       );
       const child = spawn(launch.command, launch.args, {
         cwd: root,
@@ -636,18 +641,26 @@ function rolePrompt(
 function roleCommand(value: Command | undefined, issue: number, cfg: Config): Spec | undefined {
   const spec = command(value, issue);
   if (!spec) return undefined;
-  if (
-    /^(?:.*[\\/])?codex(?:\.cmd)?$/i.test(spec.command) &&
-    spec.args[0] === 'exec' &&
-    !spec.args.includes('--dangerously-bypass-approvals-and-sandbox') &&
-    !spec.args.includes('--sandbox')
-  ) {
-    return {
-      ...spec,
-      args: [...spec.args, '--sandbox', cfg.codexSandbox ?? 'read-only'],
-    };
+  if (Array.isArray(value))
+    throw new Error(
+      'role commands must be { command, args, timeoutMs, retries }; migrate each role command from argv arrays',
+    );
+  if (/^(?:.*[\\/])?codex(?:\.cmd)?$/i.test(spec.command) && spec.args[0] === 'exec') {
+    const sandboxIndexes = spec.args.reduce<number[]>(
+      (indexes, arg, index) => (arg === '--sandbox' ? [...indexes, index] : indexes),
+      [],
+    );
+    if (
+      sandboxIndexes.length !== 1 ||
+      !['read-only', 'workspace-write', 'danger-full-access'].includes(
+        spec.args[sandboxIndexes[0] + 1] ?? '',
+      )
+    )
+      throw new Error(
+        `${spec.command} exec must include exactly one valid --sandbox in args; migrate each role command and remove legacy codexSandbox`,
+      );
   }
-  return spec;
+  return { ...spec, logInvocation: cfg.logRoleInvocation !== false };
 }
 
 function workerMetadata(output: string, knownPr?: number): { pr?: number; base?: string } {
@@ -1495,6 +1508,10 @@ export function acquire(d: Deps, ttl: number): string {
 }
 
 export async function dispatch(cfg: Config, d: Deps): Promise<void> {
+  if ('codexSandbox' in (cfg as Record<string, unknown>))
+    throw new Error(
+      'codexSandbox is no longer supported; configure --sandbox in each role command args',
+    );
   if (cfg.baseBranch !== undefined && cfg.baseBranch !== 'staging')
     throw new Error(`Worker PR baseBranch must be staging; found ${cfg.baseBranch}`);
   const initial = d.load();
@@ -1508,6 +1525,9 @@ export async function dispatch(cfg: Config, d: Deps): Promise<void> {
   try {
     if (!cfg.workerCommand || !cfg.staffReviewCommand || !cfg.qaCommand)
       throw new Error('workerCommand, staffReviewCommand and qaCommand are required');
+    roleCommand(cfg.workerCommand, 0, cfg);
+    roleCommand(cfg.qaCommand, 0, cfg);
+    roleCommand(cfg.staffReviewCommand, 0, cfg);
     const processed = new Set<number>(d.load().completedIssues ?? []);
     const existingIssue = recovery || isActiveStatus(d.load().status) ? d.load().issue : undefined;
     d.save({ ...d.load(), drainStatus: 'running' });

@@ -114,9 +114,9 @@ test('non-batch commands preserve their executable and arguments', () => {
 
 const baseConfig = {
   baseBranch: 'staging',
-  workerCommand: ['codex', 'exec'],
-  staffReviewCommand: ['codex', 'exec'],
-  qaCommand: ['codex', 'exec'],
+  workerCommand: { command: 'codex', args: ['exec', '--sandbox', 'read-only'] },
+  staffReviewCommand: { command: 'codex', args: ['exec', '--sandbox', 'read-only'] },
+  qaCommand: { command: 'codex', args: ['exec', '--sandbox', 'read-only'] },
   requiredPrChecks: ['pr-checks'],
   checkPollIntervalMs: 0,
   checkTimeoutMs: 1000,
