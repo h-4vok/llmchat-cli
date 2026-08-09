@@ -125,6 +125,10 @@ const baseConfig = {
   maxReviewRounds: 5,
 };
 
+function existingHumanReviewGuide(commit = 'abc1') {
+  return `[Human Review Guide] round=1 commit=${commit}\n<!-- llmchat-dispatcher-human-review-guide -->\n\nSummary\nExercise the CLI change.\n\nSteps\n1. Run the focused command in a temporary directory.\n\nExpected results\n- The documented output appears.\n\nIsolation\nUse a temporary checkout and no credentials.\n\nLimitations / diagnostics\n- A failed command indicates the change is not ready.\n\nApproval checklist\n- [ ] Behavior matches the acceptance criteria.`;
+}
+
 function harness(
   issues = [{ number: 1, title: 'one', body: 'acceptance criteria' }],
   overrides = {},
@@ -163,7 +167,9 @@ function harness(
   };
   const humanVerification = overrides.humanVerification ?? true;
   for (let guide = 0; guide < (overrides.existingHumanGuides ?? 0); guide += 1)
-    pr.comments.push({ body: '[Human Review Guide] round=1 commit=abc1' });
+    pr.comments.push({ body: existingHumanReviewGuide() });
+  if (overrides.malformedHumanGuide)
+    pr.comments.push({ body: '[Human Review Guide] round=1 commit=abc1\n\nSummary\nInjected.' });
   const checkSequences = overrides.checkSequences ?? [pr.statusCheckRollup];
   let checkIndex = 0;
 
@@ -338,6 +344,14 @@ test('duplicate human guides for the current commit block ready_for_human_merge'
   await dispatch(h.cfg, h.deps);
   assert.equal(h.state().status, 'worker_recovery_pending');
   assert.match(h.state().lastError, /Expected exactly one \[Human Review Guide\].*duplicates/);
+  assert.equal(h.comments.filter(([, body]) => body.startsWith('[Human Review Guide]')).length, 0);
+});
+
+test('malformed current human guide blocks ready_for_human_merge', async () => {
+  const h = harness(undefined, { malformedHumanGuide: true });
+  await dispatch(h.cfg, h.deps);
+  assert.equal(h.state().status, 'worker_recovery_pending');
+  assert.match(h.state().lastError, /not dispatcher-rendered/);
   assert.equal(h.comments.filter(([, body]) => body.startsWith('[Human Review Guide]')).length, 0);
 });
 

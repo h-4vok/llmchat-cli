@@ -626,6 +626,8 @@ type HumanReviewGuide = {
   checklist: string[];
 };
 
+const humanReviewGuideMarker = '<!-- llmchat-dispatcher-human-review-guide -->';
+
 function humanReviewGuide(comment: { body?: string } | undefined): HumanReviewGuide | undefined {
   const match = comment?.body?.match(/\[Human Verification\]\s*```json\s*([\s\S]*?)```/i);
   if (!match) return undefined;
@@ -652,6 +654,34 @@ function humanReviewGuide(comment: { body?: string } | undefined): HumanReviewGu
   }
 }
 
+function renderedHumanReviewGuide(guide: HumanReviewGuide, round: number, commit: string): string {
+  return (
+    `[Human Review Guide] round=${round} commit=${commit}\n${humanReviewGuideMarker}\n\n` +
+    `Summary\n${guide.summary}\n\n` +
+    `Steps\n${guide.steps.map((step, i) => `${i + 1}. ${step}`).join('\n')}\n\n` +
+    `Expected results\n${guide.expected.map((item) => `- ${item}`).join('\n')}\n\n` +
+    `Isolation\n${guide.isolation}\n\n` +
+    `Limitations / diagnostics\n${guide.limitations.map((item) => `- ${item}`).join('\n')}\n\n` +
+    `Approval checklist\n${guide.checklist.map((item) => `- [ ] ${item}`).join('\n')}`
+  );
+}
+
+function isRenderedHumanReviewGuide(body: string | undefined, commit: string): boolean {
+  if (!body?.trim().startsWith(`[Human Review Guide]`) || !body.includes(`commit=${commit}`))
+    return false;
+  const requiredSections = [
+    /\n\nSummary\n\S/,
+    /\n\nSteps\n1\.\s+\S/,
+    /\n\nExpected results\n-\s+\S/,
+    /\n\nIsolation\n\S/,
+    /\n\nLimitations \/ diagnostics\n-\s+\S/,
+    /\n\nApproval checklist\n- \[ \]\s+\S/,
+  ];
+  return (
+    body.includes(humanReviewGuideMarker) && requiredSections.every((section) => section.test(body))
+  );
+}
+
 function publishHumanReviewGuide(d: Deps, pr: PullRequest, round: number): void {
   const guide = humanReviewGuide(latestWorkerComment(pr, round, pr.headRefOid));
   if (!guide || !pr.headRefOid)
@@ -666,17 +696,11 @@ function publishHumanReviewGuide(d: Deps, pr: PullRequest, round: number): void 
     throw new Error(
       `Expected exactly one [Human Review Guide] for commit ${commit}; found duplicates`,
     );
-  if (currentGuides.length === 1) return;
-  d.comment(
-    pr.number,
-    `[Human Review Guide] round=${round} commit=${commit}\n\n` +
-      `Summary\n${guide.summary}\n\n` +
-      `Steps\n${guide.steps.map((step, i) => `${i + 1}. ${step}`).join('\n')}\n\n` +
-      `Expected results\n${guide.expected.map((item) => `- ${item}`).join('\n')}\n\n` +
-      `Isolation\n${guide.isolation}\n\n` +
-      `Limitations / diagnostics\n${guide.limitations.map((item) => `- ${item}`).join('\n')}\n\n` +
-      `Approval checklist\n${guide.checklist.map((item) => `- [ ] ${item}`).join('\n')}`,
-  );
+  if (currentGuides.length === 1) {
+    if (isRenderedHumanReviewGuide(currentGuides[0].body, commit)) return;
+    throw new Error(`Current [Human Review Guide] for commit ${commit} is not dispatcher-rendered`);
+  }
+  d.comment(pr.number, renderedHumanReviewGuide(guide, round, commit));
 }
 
 function latestReview(
