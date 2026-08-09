@@ -29,9 +29,33 @@ test('Windows batch commands use cmd.exe without Node shell mode', () => {
     ),
     {
       command: 'C:\\Windows\\System32\\cmd.exe',
-      args: ['/d', '/s', '/v:off', '/c', '"C:\\tools\\codex.cmd" "exec" "--full-auto"'],
+      args: ['/d', '/s', '/v:off', '/c', '""C:\\tools\\codex.cmd" "exec" "--full-auto""'],
+      windowsVerbatimArguments: true,
     },
   );
+});
+
+test('Windows batch commands execute from paths containing spaces', (t) => {
+  if (process.platform !== 'win32') {
+    t.skip('requires Windows cmd.exe');
+    return;
+  }
+
+  const directory = mkdtempSync(join(tmpdir(), 'llmchat batch command-'));
+  const executable = join(directory, 'echo argument.cmd');
+  writeFileSync(executable, '@echo off\r\necho %~1\r\n');
+  try {
+    const launch = childProcessInvocation(executable, ['expected'], 'win32', process.env.ComSpec);
+    const result = spawnSync(launch.command, launch.args, {
+      encoding: 'utf8',
+      shell: false,
+      windowsVerbatimArguments: launch.windowsVerbatimArguments,
+    });
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.stdout.trim(), 'expected');
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
 });
 
 test('Windows batch commands reject cmd.exe syntax in argv before launch', () => {

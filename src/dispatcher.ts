@@ -245,7 +245,7 @@ export function childProcessInvocation(
   args: string[],
   platform = process.platform,
   commandProcessor = process.env.ComSpec,
-): { command: string; args: string[] } {
+): { command: string; args: string[]; windowsVerbatimArguments?: boolean } {
   if (platform === 'win32' && /\.(cmd|bat)$/i.test(executable)) {
     // cmd.exe must parse batch files, so never pass arbitrary argv entries to
     // its command parser. The dispatcher only needs fixed CLI flags for batch
@@ -260,8 +260,9 @@ export function childProcessInvocation(
         '/s',
         '/v:off',
         '/c',
-        `"${executable}" ${args.map((arg) => `"${arg}"`).join(' ')}`,
+        `""${executable}" ${args.map((arg) => `"${arg}"`).join(' ')}"`,
       ],
+      windowsVerbatimArguments: true,
     };
   }
   return { command: executable, args };
@@ -421,6 +422,7 @@ export function runCommand(spec: Spec | undefined): Promise<string> {
         cwd: root,
         windowsHide: true,
         env: spec.env ? { ...process.env, ...spec.env } : process.env,
+        windowsVerbatimArguments: launch.windowsVerbatimArguments,
       });
       spec.onStart?.(child.pid ?? -1);
       const heartbeat = () => spec.onHeartbeat?.();
