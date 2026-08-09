@@ -42,6 +42,16 @@ test('redactDiagnostic preserves diagnostic context without credential values', 
   assert.match(redacted, /\[REDACTED\]/);
 });
 
+test('redactDiagnostic redacts JSON secrets and prefixed environment credentials', () => {
+  const diagnostic =
+    '{"token":"json-secret","password":"p@ss"}\nGITHUB_TOKEN=env-secret\nSERVICE_API_KEY="api-secret"';
+  const redacted = redactDiagnostic(diagnostic);
+  assert.doesNotMatch(redacted, /json-secret|p@ss|env-secret|api-secret/);
+  assert.match(redacted, /token["']?\s*:\s*\[REDACTED\]/i);
+  assert.match(redacted, /GITHUB_TOKEN=\[REDACTED\]/);
+  assert.match(redacted, /SERVICE_API_KEY=\[REDACTED\]/);
+});
+
 function harness(
   issues = [{ number: 1, title: 'one', body: 'acceptance criteria' }],
   overrides = {},
