@@ -17,6 +17,10 @@ Every review round has one publication per role. Markers are mandatory and case-
 
 A Worker run persists its `runId`, PID, lease, heartbeat, PR, branch, head SHA, phase, and review context. On startup, a missing process or expired lease transitions to `worker_recovery_pending`. The dispatcher reads the issue, existing PR, CI, comments, reviews, and saved context, then starts a new Worker against the same PR. It never deletes GitHub history or creates a second PR during recovery.
 
+## Review-cap HITL
+
+The dispatcher never starts a Worker beyond `maxReviewRounds`. It records `review_cap_pending` with the current SHA and outstanding QA/Staff IDs, and posts the decision context to both the issue and PR. A human may grant a local `--additional-rounds N` budget, waive exact `Q<n>`/`S<n>` findings (or all current findings), and provide a mandatory `--steer` that is included in resumed Worker, QA, and Staff prompts. A no-round waiver is only ready for human merge when all current findings are waived and CI/mergeability are healthy. Abandonment is explicit, closes the PR and issue with `wontfix`, and never merges.
+
 ## Multi-issue batches
 
 For a batch, create `integration/<identifier>` from `staging`, associate each issue in comments, and open one PR to `staging`. The sequence and single-active-task rule remain in force; branches are not mixed and merges are never automatic.

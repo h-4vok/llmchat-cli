@@ -28,6 +28,9 @@ export type Status =
   | 'staff_review_pending'
   | 'staff_changes_requested'
   | 'staff_approved'
+  | 'review_cap_pending'
+  | 'abandon_pending'
+  | 'abandoned'
   | 'ready_for_human_merge'
   | 'blocked'
   | 'done';
@@ -52,6 +55,24 @@ export type State = {
   workerStartedAt?: number;
   workerHeartbeatAt?: number;
   workerRecoveryCount?: number;
+  linkedClosingIssues?: number[];
+  reviewCap?: {
+    capRound: number;
+    decisionSha?: string;
+    outstandingFindingIds: string[];
+    additionalRounds: number;
+    waivedFindingIds: string[];
+    steer?: string;
+    resolvedBy?: string;
+    resolvedAt?: string;
+  };
+  abandonment?: {
+    steer: string;
+    commentPublished?: boolean;
+    prClosed?: boolean;
+    labelled?: boolean;
+    issueClosed?: boolean;
+  };
   completedIssues?: number[];
   drainStatus?: 'running' | 'done';
   updatedAt?: number;
@@ -120,6 +141,7 @@ type Deps = {
   checkoutWorkerBranch?: (branch: string) => void;
   updatePullRequestBody?: (pr: number, body: string) => void | Promise<void>;
   pullRequestBody?: (pr: number) => string | Promise<string>;
+  prComment?: (pr: number, body: string) => void | Promise<void>;
 };
 type Spec = {
   command: string;
@@ -301,18 +323,45 @@ function updatePullRequestBody(pr: number, body: string): void {
   }
 }
 
+function commentPullRequest(pr: number, body: string): void {
+  gh(['pr', 'comment', String(pr), '--body', body]);
+}
+
+function commentIssueOnce(issue: number, body: string): void {
+  const existing = ghJson<{ comments?: Array<{ body?: string }> }>([
+    'issue',
+    'view',
+    String(issue),
+    '--json',
+    'comments',
+  ]);
+  if (!existing.comments?.some((comment) => comment.body === body))
+    gh(['issue', 'comment', String(issue), '--body', body]);
+}
+
+function commentPullRequestOnce(pr: number, body: string): void {
+  if (!(pullRequest(pr).comments ?? []).some((comment) => comment.body === body))
+    commentPullRequest(pr, body);
+}
+
 function pullRequestBody(pr: number): string {
   return ghJson<{ body?: string }>(['pr', 'view', String(pr), '--json', 'body']).body ?? '';
 }
 
-/** Keep the claimed issue's GitHub closing reference exactly once in a PR body. */
-export function withIssueClosingReference(body: string | undefined, issue: number): string {
-  if (!Number.isInteger(issue) || issue <= 0) throw new Error('issue number must be positive');
+/** Keep every state-authorized GitHub closing reference exactly once in a PR body. */
+export function withIssueClosingReference(
+  body: string | undefined,
+  issue: number,
+  linkedIssues: number[] = [],
+): string {
+  const issues = [...new Set([issue, ...linkedIssues])];
+  if (issues.some((number) => !Number.isInteger(number) || number <= 0))
+    throw new Error('issue number must be positive');
   const withoutClosingReferences = (body ?? '').replace(
     /^\s*(?:closes|close|closed)\s+#\d+\s*$/gim,
     '',
   );
-  return `${withoutClosingReferences.trim()}${withoutClosingReferences.trim() ? '\n\n' : ''}Closes #${issue}`;
+  return `${withoutClosingReferences.trim()}${withoutClosingReferences.trim() ? '\n\n' : ''}${issues.map((number) => `Closes #${number}`).join('\n')}`;
 }
 
 export function command(
@@ -403,7 +452,9 @@ function isWorkerStatus(status: Status | undefined): boolean {
 }
 
 function isActiveStatus(status: Status | undefined): boolean {
-  return Boolean(status && !['done', 'ready_for_human_merge', 'blocked'].includes(status));
+  return Boolean(
+    status && !['done', 'ready_for_human_merge', 'blocked', 'abandoned'].includes(status),
+  );
 }
 
 function hasPersistedRecoveryContext(state: State): boolean {
@@ -464,7 +515,7 @@ function rolePrompt(
 ): string {
   const issueContext = issue.body?.trim() || '(issue body unavailable; inspect it with gh)';
   if (role === 'worker')
-    return `Use the worker skill for GitHub issue #${issue.number}: ${issue.title}. This is dispatcher recovery run ${runId}, review round ${round}. Continue the existing task in the current checkout. ${pr ? `An existing PR is #${pr}; update that PR and never create a second PR.` : 'Create exactly one PR targeting staging if one does not exist.'} Do not merge. The claimed issue number is ${issue.number} (also in LLMCHAT_ISSUE_NUMBER). When creating or updating the PR, read its current body and replace all standalone GitHub closing-reference lines matching Closes/Close/Closed #N with exactly one line \`Closes #${issue.number}\`; preserve the rest of the body. Use gh pr create/edit (or equivalent) to persist that body, so recovery and review updates cannot duplicate the reference. Inspect the issue, current PR diff, CI checks, mergeability, and all [QA/SDET Review] and [Staff Review] feedback. If the PR is CONFLICTING or DIRTY against staging, update the branch from staging, resolve every conflict, run the required checks, and do not report ready_for_review until the PR is clean and mergeable. Resolve every actionable finding and publish one PR conversation comment beginning with [Worker], including round=${round}, status=ready_for_review, pr=<number>, base=staging, and commit=<current head SHA>. The dispatcher will verify that comment and the PR mergeability on GitHub. Never delete or modify .llmchat/state.json or dispatcher runtime state. Exit 0 only after the work, conflict resolution, and comment are complete; do not return JSON. Issue body:\n${issueContext}\n${context ? `Recovered context:\n${context}\n` : ''}${feedback ? `Actionable feedback to resolve:\n${feedback}\n` : ''}At the end, print a plain-text line exactly like WORKER_RESULT pr=<number> base=staging. All command success/failure is communicated by the process exit code.`;
+    return `Use the worker skill for GitHub issue #${issue.number}: ${issue.title}. This is dispatcher recovery run ${runId}, review round ${round}. Continue the existing task in the current checkout. ${pr ? `An existing PR is #${pr}; update that PR and never create a second PR.` : 'Create exactly one PR targeting staging if one does not exist.'} Do not merge. The claimed issue number is ${issue.number} (also in LLMCHAT_ISSUE_NUMBER). When creating or updating the PR, preserve every state-authorized closing reference supplied in the recovery context exactly once; do not add or remove other issue links without dispatcher instruction. Use gh pr create/edit (or equivalent) to persist that body. Inspect the issue, current PR diff, CI checks, mergeability, and all [QA/SDET Review] and [Staff Review] feedback. If the PR is CONFLICTING or DIRTY against staging, update the branch from staging, resolve every conflict, run the required checks, and do not report ready_for_review until the PR is clean and mergeable. Resolve every actionable finding and publish one PR conversation comment beginning with [Worker], including round=${round}, status=ready_for_review, pr=<number>, base=staging, and commit=<current head SHA>. The dispatcher will verify that comment and the PR mergeability on GitHub. Never delete or modify .llmchat/state.json or dispatcher runtime state. Exit 0 only after the work, conflict resolution, and comment are complete; do not return JSON. Issue body:\n${issueContext}\n${context ? `Recovered context:\n${context}\n` : ''}${feedback ? `Actionable feedback to resolve:\n${feedback}\n` : ''}At the end, print a plain-text line exactly like WORKER_RESULT pr=<number> base=staging. All command success/failure is communicated by the process exit code.`;
   if (role === 'qa')
     return `Use the qa-sdet skill for GitHub issue #${issue.number}: ${issue.title}. Review PR #${pr} against staging before Staff. Current head is ${headSha ?? 'unknown'} and this is review round ${round}. Inspect the acceptance criteria, diff, CI check results, regression coverage, and smoke evidence. Publish directly to the PR exactly one review beginning [QA/SDET Review] round=${round} verdict=passed, changes_requested, or blocked. Include Q<n> findings, exact evidence, and commit=${headSha ?? 'current'}. Do not edit code or merge. Exit 0 after publishing the review; do not return JSON. Issue body:\n${issueContext}`;
   return `Use the staff-reviewer skill for GitHub issue #${issue.number}: ${issue.title}. Review PR #${pr} against staging after QA has passed. Current head is ${headSha ?? 'unknown'} and this is review round ${round}. Perform the independent adversarial review for design, security, regressions, boundaries, and abuse cases. Publish directly to the PR exactly one review beginning [Staff Review] round=${round} verdict=approved or changes_requested, include S<n> findings when needed, and include commit=${headSha ?? 'current'}. Do not edit code or merge. Exit 0 after publishing the review; do not return JSON. Issue body:\n${issueContext}`;
@@ -704,7 +755,11 @@ async function runWorker(
     throw new Error('Worker must report an existing PR based on staging');
   if (!d.pullRequest) throw new Error('GitHub PR evidence adapter is required');
   const currentBody = await (d.pullRequestBody ?? pullRequestBody)(metadata.pr);
-  const normalizedBody = withIssueClosingReference(currentBody, issue.number);
+  const normalizedBody = withIssueClosingReference(
+    currentBody,
+    issue.number,
+    d.load().linkedClosingIssues ?? [],
+  );
   if (normalizedBody !== currentBody.trim())
     await (d.updatePullRequestBody ?? updatePullRequestBody)(metadata.pr, normalizedBody);
   d.save({ ...d.load(), pr: metadata.pr, workerPid: undefined, workerHeartbeatAt: d.now() });
@@ -786,9 +841,37 @@ async function runReview(
   return { verdict: reviewVerdict(review.body), body: review.body, evidence: latest };
 }
 
-function maxRounds(cfg: Config, round: number): void {
-  if (round > (cfg.maxReviewRounds ?? 10))
-    throw new Error(`review sloop exceeded maxReviewRounds=${cfg.maxReviewRounds ?? 10}`);
+function effectiveMaxRounds(cfg: Config, state: State): number {
+  return (cfg.maxReviewRounds ?? 10) + (state.reviewCap?.additionalRounds ?? 0);
+}
+
+function findingIds(feedback: string): string[] {
+  return [
+    ...new Set(
+      feedback
+        .split(/\r?\n/)
+        .filter((line) => /\[([QS]\d+)\]\s+(?:fail|blocked|high|critical|medium|low)\b/i.test(line))
+        .map((line) => line.match(/\[([QS]\d+)\]/i)?.[1].toUpperCase())
+        .filter((id): id is string => Boolean(id)),
+    ),
+  ];
+}
+
+async function pauseForReviewCap(cfg: Config, d: Deps, issue: Issue, round: number): Promise<void> {
+  const current = d.load();
+  const feedback = [current.lastQaFeedback, current.lastStaffFeedback].filter(Boolean).join('\n');
+  const cap = {
+    capRound: cfg.maxReviewRounds ?? 10,
+    decisionSha: current.headSha,
+    outstandingFindingIds: findingIds(feedback),
+    additionalRounds: current.reviewCap?.additionalRounds ?? 0,
+    waivedFindingIds: current.reviewCap?.waivedFindingIds ?? [],
+    steer: current.reviewCap?.steer,
+  };
+  status(d, issue.number, 'review_cap_pending', { reviewRound: round, reviewCap: cap });
+  const notice = `[HITL Review Cap] round=${round} cap=${effectiveMaxRounds(cfg, current)} sha=${current.headSha ?? 'unknown'} outstanding=${cap.outstandingFindingIds.join(',') || 'none'}. Resolve with npm run sloop -- --resolve-review-cap --steer "..." plus --additional-rounds N, --waive <Q/S>, --waive-all-outstanding, or --abandon.`;
+  d.comment(issue.number, notice);
+  if (current.pr) await d.prComment?.(current.pr, notice);
 }
 
 async function processIssue(cfg: Config, d: Deps, issue: Issue): Promise<void> {
@@ -798,6 +881,12 @@ async function processIssue(cfg: Config, d: Deps, issue: Issue): Promise<void> {
   let feedback = [current.lastCiFeedback, current.lastQaFeedback, current.lastStaffFeedback]
     .filter(Boolean)
     .join('\n\n');
+  if (current.reviewCap?.steer)
+    feedback = `${feedback}${feedback ? '\n\n' : ''}HITL steer (binding): ${current.reviewCap.steer}. Waived findings at ${current.reviewCap.decisionSha ?? 'the decision SHA'}: ${(current.reviewCap.waivedFindingIds ?? []).join(', ') || 'none'}.`;
+  if (round > effectiveMaxRounds(cfg, current)) {
+    await pauseForReviewCap(cfg, d, issue, round);
+    return;
+  }
   const needsWorker = ![
     'worker_ready_for_review',
     'ci_pending',
@@ -819,8 +908,11 @@ async function processIssue(cfg: Config, d: Deps, issue: Issue): Promise<void> {
   if (!pr) throw new Error('dispatcher requires a PR before CI and reviews');
 
   while (true) {
-    maxRounds(cfg, round);
     current = d.load();
+    if (round > effectiveMaxRounds(cfg, current)) {
+      await pauseForReviewCap(cfg, d, issue, round);
+      return;
+    }
     const resumeAtStaff = ['qa_approved', 'staff_review_pending'].includes(current.status ?? '');
     const shouldRunQa = !resumeAtStaff;
     const ci =
@@ -831,6 +923,10 @@ async function processIssue(cfg: Config, d: Deps, issue: Issue): Promise<void> {
       feedback = ci.feedback ?? 'Required PR checks failed.';
       d.save({ ...d.load(), lastCiFeedback: feedback, reviewRound: round });
       round += 1;
+      if (round > effectiveMaxRounds(cfg, d.load())) {
+        await pauseForReviewCap(cfg, d, issue, round);
+        return;
+      }
       pr = await runWorker(cfg, d, issue, round, pr, d.load().taskContext ?? '', feedback);
       continue;
     }
@@ -846,6 +942,10 @@ async function processIssue(cfg: Config, d: Deps, issue: Issue): Promise<void> {
         status(d, issue.number, 'qa_changes_requested', { lastQaFeedback: qaFeedback });
         feedback = qaFeedback;
         round += 1;
+        if (round > effectiveMaxRounds(cfg, d.load())) {
+          await pauseForReviewCap(cfg, d, issue, round);
+          return;
+        }
         pr = await runWorker(cfg, d, issue, round, pr, d.load().taskContext ?? '', feedback);
         continue;
       }
@@ -863,6 +963,10 @@ async function processIssue(cfg: Config, d: Deps, issue: Issue): Promise<void> {
       status(d, issue.number, 'staff_changes_requested', { lastStaffFeedback: staffFeedback });
       feedback = staffFeedback;
       round += 1;
+      if (round > effectiveMaxRounds(cfg, d.load())) {
+        await pauseForReviewCap(cfg, d, issue, round);
+        return;
+      }
       pr = await runWorker(cfg, d, issue, round, pr, d.load().taskContext ?? '', feedback);
       continue;
     }
@@ -952,6 +1056,161 @@ export function resetRunState(state: State, processAlive = defaultProcessAlive):
     drainStatus: 'running',
     updatedAt: Date.now(),
   };
+}
+
+function argumentValues(args: string[], flag: string): string[] {
+  const values: string[] = [];
+  for (let index = 0; index < args.length; index++)
+    if (args[index] === flag && args[index + 1] && !args[index + 1].startsWith('--'))
+      values.push(args[index + 1]);
+  return values;
+}
+
+function activeRunForHitl(state: State): Required<Pick<State, 'issue' | 'pr'>> & State {
+  if (state.status !== 'review_cap_pending' || !state.issue || !state.pr)
+    throw new Error(
+      'HITL resolution requires one active run in review_cap_pending with an existing PR',
+    );
+  return state as Required<Pick<State, 'issue' | 'pr'>> & State;
+}
+
+function hitlComment(state: State, action: string): string {
+  const cap = state.reviewCap!;
+  return `[HITL Review Cap] action=${action} issue=#${state.issue} pr=#${state.pr} round=${state.reviewRound} sha=${cap.decisionSha ?? 'unknown'} waived=${cap.waivedFindingIds.join(',') || 'none'} additionalRounds=${cap.additionalRounds} steer=${cap.steer}`;
+}
+
+function publishHitlDecision(state: State, action: string): void {
+  const body = hitlComment(state, action);
+  commentIssueOnce(state.issue!, body);
+  commentPullRequestOnce(state.pr!, body);
+}
+
+function prHealthyForHumanMerge(pr: PullRequest, cfg: Config): boolean {
+  const checks = pr.statusCheckRollup ?? [];
+  return (
+    pr.mergeable?.toUpperCase() !== 'CONFLICTING' &&
+    pr.mergeStateStatus?.toUpperCase() !== 'DIRTY' &&
+    (cfg.requiredPrChecks ?? ['pr-checks']).every((name) => {
+      const check = checks.find((candidate) => candidate.name === name);
+      return Boolean(check && normalizeCheckStatus(check).passed);
+    })
+  );
+}
+
+function resolveReviewCap(args: string[], cfg: Config): void {
+  const stored = readState();
+  const steer = argumentValues(args, '--steer').at(-1)?.trim();
+  if (!steer) throw new Error('--resolve-review-cap requires --steer <text>');
+  const abandon = args.includes('--abandon');
+  const waiveAll = args.includes('--waive-all-outstanding');
+  const waived = argumentValues(args, '--waive').flatMap((value) => value.split(','));
+  const additionalRaw = argumentValues(args, '--additional-rounds').at(-1);
+  const additionalRounds = additionalRaw === undefined ? 0 : Number(additionalRaw);
+  if (!Number.isInteger(additionalRounds) || additionalRounds < 0)
+    throw new Error('--additional-rounds must be a non-negative integer');
+  if (abandon && (waiveAll || waived.length || additionalRounds))
+    throw new Error('--abandon cannot be combined with waivers or additional rounds');
+  if (!abandon && !waiveAll && !waived.length && additionalRounds === 0)
+    throw new Error('choose --additional-rounds, --waive, --waive-all-outstanding, or --abandon');
+
+  if (abandon) {
+    if (
+      !stored.issue ||
+      !stored.pr ||
+      !['review_cap_pending', 'abandon_pending'].includes(stored.status ?? '')
+    )
+      throw new Error('abandonment requires the active review-cap run or its pending abandonment');
+    let state: State = {
+      ...stored,
+      status: 'abandon_pending',
+      abandonment: { ...stored.abandonment, steer },
+    };
+    writeState(state);
+    if (!state.abandonment?.commentPublished) {
+      publishHitlDecision(state, 'abandon');
+      state = { ...state, abandonment: { ...state.abandonment!, commentPublished: true } };
+      writeState(state);
+    }
+    if (!state.abandonment?.prClosed) {
+      gh(['pr', 'close', String(state.pr)]);
+      state = { ...state, abandonment: { ...state.abandonment!, prClosed: true } };
+      writeState(state);
+    }
+    if (!state.abandonment?.labelled) {
+      gh(['issue', 'edit', String(state.issue), '--add-label', 'wontfix']);
+      state = { ...state, abandonment: { ...state.abandonment!, labelled: true } };
+      writeState(state);
+    }
+    if (!state.abandonment?.issueClosed) {
+      gh(['issue', 'close', String(state.issue)]);
+      state = { ...state, abandonment: { ...state.abandonment!, issueClosed: true } };
+      writeState(state);
+    }
+    writeState({
+      ...state,
+      status: 'abandoned',
+    });
+    return;
+  }
+
+  const current = activeRunForHitl(stored);
+
+  const outstanding = new Set(current.reviewCap?.outstandingFindingIds ?? []);
+  const normalizedWaivers = waiveAll
+    ? [...outstanding]
+    : [...new Set(waived.map((id) => id.toUpperCase()))];
+  if (normalizedWaivers.some((id) => !outstanding.has(id)))
+    throw new Error(
+      `waivers must name outstanding findings: ${[...outstanding].join(', ') || 'none'}`,
+    );
+  const cap = {
+    ...current.reviewCap!,
+    additionalRounds: (current.reviewCap?.additionalRounds ?? 0) + additionalRounds,
+    waivedFindingIds: [
+      ...new Set([...(current.reviewCap?.waivedFindingIds ?? []), ...normalizedWaivers]),
+    ],
+    steer,
+    resolvedBy: gh(['api', 'user', '--jq', '.login']),
+    resolvedAt: new Date().toISOString(),
+  };
+  const allWaived = cap.outstandingFindingIds.every((id) => cap.waivedFindingIds.includes(id));
+  if (additionalRounds === 0 && !allWaived)
+    throw new Error('findings remain; waive them explicitly or grant additional rounds');
+  const pr = pullRequest(current.pr);
+  if (additionalRounds === 0 && !prHealthyForHumanMerge(pr, cfg))
+    throw new Error(
+      'PR must have green required checks and be clean/mergeable before a no-round waiver',
+    );
+  const next: State = {
+    ...current,
+    reviewCap: cap,
+    status: additionalRounds > 0 ? 'worker_recovery_pending' : 'ready_for_human_merge',
+    lastError: undefined,
+    updatedAt: Date.now(),
+  };
+  writeState(next);
+  publishHitlDecision(next, additionalRounds > 0 ? 'resume' : 'waive_ready_for_human_merge');
+}
+
+function linkIssueToActiveRun(issue: number): void {
+  if (!Number.isInteger(issue) || issue <= 0)
+    throw new Error('--link-issue requires a positive issue number');
+  const current = readState();
+  if (!current.issue || !current.pr)
+    throw new Error('--link-issue requires one active run with an existing PR');
+  gh(['issue', 'view', String(issue), '--json', 'number,state']);
+  const linkedClosingIssues = [...new Set([...(current.linkedClosingIssues ?? []), issue])].filter(
+    (number) => number !== current.issue,
+  );
+  const next = { ...current, linkedClosingIssues, updatedAt: Date.now() };
+  writeState(next);
+  const body = pullRequestBody(current.pr);
+  const normalized = withIssueClosingReference(body, current.issue, linkedClosingIssues);
+  if (normalized !== body.trim()) updatePullRequestBody(current.pr, normalized);
+  const note = `[Sloop linked issue] PR #${current.pr} closes #${current.issue} and #${issue} when a human merges to staging.`;
+  commentIssueOnce(current.issue, note);
+  commentIssueOnce(issue, note);
+  commentPullRequestOnce(current.pr, note);
 }
 
 export function acquire(d: Deps, ttl: number): string {
@@ -1130,6 +1389,17 @@ async function main() {
     console.log('Estado local del sloop reiniciado. Ejecutá npm run sloop.');
     return;
   }
+  if (args.includes('--resolve-review-cap')) {
+    resolveReviewCap(args, cfg);
+    console.log('Resolución HITL registrada.');
+    return;
+  }
+  const linkIssueIndex = args.indexOf('--link-issue');
+  if (linkIssueIndex >= 0) {
+    linkIssueToActiveRun(Number(args[linkIssueIndex + 1]));
+    console.log(`Issue #${args[linkIssueIndex + 1]} vinculada al PR activo.`);
+    return;
+  }
   const recoveryIndex = args.indexOf('--prepare-recovery');
   if (recoveryIndex >= 0) {
     const issue = Number(args[recoveryIndex + 1]);
@@ -1151,6 +1421,7 @@ async function main() {
     comment: (i, body) => gh(['issue', 'comment', String(i), '--body', body]),
     run: runCommand,
     pullRequest,
+    prComment: commentPullRequest,
     now: Date.now,
     pid: () => process.pid,
     processAlive: defaultProcessAlive,

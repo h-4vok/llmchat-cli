@@ -225,7 +225,7 @@ test('create and recovery smoke paths capture the persisted claimed-issue PR bod
   const workerInput =
     h.runs.find((run) => run.input?.includes('Use the worker skill'))?.input ?? '';
   assert.match(workerInput, /gh pr create\/edit \(or equivalent\) to persist that body/);
-  assert.match(workerInput, /exactly one line `Closes #17`/);
+  assert.match(workerInput, /state-authorized closing reference/);
 
   // This is the recovery/update path: the captured `gh pr edit --body-file`
   // equivalent receives one normalized reference and no stale references.
@@ -238,14 +238,59 @@ test('worker creation contract includes the normalized claimed-issue body', asyn
   await dispatch(h.cfg, h.deps);
   const workerInput =
     h.runs.find((run) => run.input?.includes('Use the worker skill'))?.input ?? '';
-  assert.match(workerInput, /When creating or updating the PR, read its current body/);
-  assert.match(workerInput, /exactly one line `Closes #17`/);
+  assert.match(
+    workerInput,
+    /When creating or updating the PR, preserve every state-authorized closing reference/,
+  );
   assert.match(workerInput, /Use gh pr create\/edit \(or equivalent\) to persist that body/);
 });
 
 test('worker branch convention is deterministic and rejects invalid issue numbers', () => {
   assert.equal(workerBranchName(16), 'codex/issue-16');
   assert.throws(() => workerBranchName(0), /issue number must be positive/);
+});
+
+test('PR closing references preserve authorized linked issues and remove stale ones', () => {
+  assert.equal(
+    withIssueClosingReference('Summary\n\nCloses #1\nClose #17\nClosed #99', 17, [39]),
+    'Summary\n\nCloses #17\nCloses #39',
+  );
+});
+
+test('review cap pauses before a replacement Worker is launched', async () => {
+  const h = harness([{ number: 1, title: 'one' }], {
+    qaVerdicts: ['changes_requested'],
+    config: { maxReviewRounds: 1 },
+  });
+  await dispatch(h.cfg, h.deps);
+  assert.equal(h.state().status, 'review_cap_pending');
+  assert.equal(h.state().reviewRound, 2);
+  assert.equal(h.counts().workerCount, 1);
+  assert.deepEqual(h.state().reviewCap.outstandingFindingIds, []);
+});
+
+test('a local HITL budget and steer are included in the resumed Worker context', async () => {
+  const h = harness([{ number: 1, title: 'one' }], {
+    initialState: {
+      issue: 1,
+      pr: 14,
+      branch: 'codex/issue-1',
+      status: 'worker_recovery_pending',
+      reviewRound: 2,
+      reviewCap: {
+        capRound: 1,
+        additionalRounds: 1,
+        waivedFindingIds: ['Q4'],
+        outstandingFindingIds: ['Q4'],
+        decisionSha: 'abc0',
+        steer: 'Do not change GitHub configuration.',
+      },
+    },
+    config: { maxReviewRounds: 1 },
+  });
+  h.deps.checkoutWorkerBranch = () => {};
+  await dispatch(h.cfg, h.deps);
+  assert.match(h.runs[0].input, /HITL steer \(binding\): Do not change GitHub configuration/);
 });
 
 test('new branch preparation refuses to overwrite an existing worker branch', () => {
