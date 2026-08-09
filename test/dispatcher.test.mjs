@@ -974,28 +974,31 @@ test('diagnostic redaction preserves safe multiline output and hides common cred
   assert.match(output, /\[REDACTED\]/);
 });
 
-test('diagnostic redaction removes complete Authorization header values', () => {
-  const output = redactDiagnostic(
-    'Authorization: Basic dXNlcjpwYXNzd29yZA==\nProxy-Authorization: Bearer proxy-secret\nurl=https://example.test/log',
-  );
-  assert.match(output, /Authorization: \[REDACTED\]/);
-  assert.match(output, /Proxy-Authorization: \[REDACTED\]/);
-  assert.doesNotMatch(output, /dXNlcjpwYXNzd29yZA==|proxy-secret/);
-  assert.match(output, /https:\/\/example\.test\/log/);
-});
+test('diagnostic redaction exactly preserves bare and prefixed header diagnostics', () => {
+  const diagnostic = [
+    'Authorization: Basic dXNlcjpwYXNzd29yZA==',
+    'Proxy-Authorization: Bearer proxy-secret',
+    'Cookie: session=one; csrf=two',
+    'Set-Cookie: session=three; HttpOnly',
+    '> Authorization: Basic dXNlcjpwYXNzd29yZA==',
+    'curl: Proxy-Authorization: Basic cHJveHk6c2VjcmV0',
+    'request headers: Cookie: session=one; csrf=two',
+    'trace: Set-Cookie: session=three; HttpOnly',
+  ].join('\n');
+  const expected = [
+    'Authorization: [REDACTED]',
+    'Proxy-Authorization: [REDACTED]',
+    'Cookie: [REDACTED]',
+    'Set-Cookie: [REDACTED]',
+    '> Authorization: [REDACTED]',
+    'curl: Proxy-Authorization: [REDACTED]',
+    'request headers: Cookie: [REDACTED]',
+    'trace: Set-Cookie: [REDACTED]',
+  ].join('\n');
+  const output = redactDiagnostic(diagnostic);
 
-test('diagnostic redaction removes complete prefixed header values', () => {
-  const output = redactDiagnostic(
-    '> Authorization: Basic dXNlcjpwYXNzd29yZA==\ncurl: Proxy-Authorization: Basic cHJveHk6c2VjcmV0\nrequest headers: Cookie: session=one; csrf=two\ntrace: Set-Cookie: session=three; HttpOnly',
-  );
-  assert.match(output, /> Authorization: \[REDACTED\]/);
-  assert.match(output, /curl: Proxy-Authorization: \[REDACTED\]/);
-  assert.match(output, /request headers: Cookie: \[REDACTED\]/);
-  assert.match(output, /trace: Set-Cookie: \[REDACTED\]/);
-  assert.doesNotMatch(
-    output,
-    /dXNlcjpwYXNzd29yZA==|cHJveHk6c2VjcmV0|session=one|csrf=two|session=three/,
-  );
+  assert.equal(output, expected);
+  assert.equal(redactDiagnostic(output), expected);
 });
 
 test('diagnostic redaction removes short Bearer credentials', () => {

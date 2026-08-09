@@ -557,15 +557,15 @@ function status(d: Deps, issue: number, next: Status, extra: Partial<State> = {}
 export function redactDiagnostic(value: string): string {
   const sensitiveKey = String.raw`(?:authorization|(?:[A-Za-z][A-Za-z0-9_]*_)?token|(?:[A-Za-z][A-Za-z0-9_]*_)?api[_-]?key|(?:[A-Za-z][A-Za-z0-9_]*_)?secret|(?:[A-Za-z][A-Za-z0-9_]*_)?password|(?:[A-Za-z][A-Za-z0-9_]*_)?cookie|(?:[A-Za-z][A-Za-z0-9_]*_)?credentials?)`;
   const assignedSecret = new RegExp(
-    String.raw`((?:["']${sensitiveKey}["']|${sensitiveKey})\s*[:=]\s*)(?:Bearer\s+)?(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^\s,;\]}]+)`,
+    String.raw`((?:["']${sensitiveKey}["']|${sensitiveKey})\s*[:=]\s*)(?!(?:\[REDACTED\])(?=$|[\s,;\]}]))(?:Bearer\s+)?(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^\s,;\]}]+)`,
     'gi',
   );
   return value
-    .replace(/\b((?:proxy-)?authorization\s*:\s*)[^\r\n]*/gi, '$1[REDACTED]')
-    .replace(/\b((?:set-)?cookie\s*:\s*)[^\r\n]*/gi, '$1[REDACTED]')
     .replace(/\b([a-z][a-z0-9+.-]*:\/\/)[^\s\/@]*@/gi, '$1[REDACTED]@')
     .replace(assignedSecret, '$1[REDACTED]')
     .replace(/\bBearer\s+[^\s,;]+/gi, 'Bearer [REDACTED]')
+    .replace(/\b((?:proxy-)?authorization\s*:\s*)[^\r\n]*/gi, '$1[REDACTED]')
+    .replace(/\b((?:set-)?cookie\s*:\s*)[^\r\n]*/gi, '$1[REDACTED]')
     .replace(/\b(?:ghp|github_pat|sk|xox[baprs])[-_A-Za-z0-9]+\b/gi, '[REDACTED]');
 }
 
