@@ -438,7 +438,7 @@ export function runCommand(spec: Spec | undefined): Promise<string> {
   if (!spec) return Promise.resolve('');
   const executable = resolveExecutable(spec.command);
   const launch = childProcessInvocation(executable, spec.args);
-  const attempt = (n: number): Promise<string> =>
+  const attempt = (n: number, failedAttempts: string[] = []): Promise<string> =>
     new Promise((resolve, reject) => {
       console.error(
         `[sloop] ejecutando (${n + 1}/${spec.retries + 1}): ${spec.command} ${spec.args.join(' ')}`,
@@ -476,16 +476,23 @@ export function runCommand(spec: Spec | undefined): Promise<string> {
       child.on('close', (code) => {
         clearTimeout(timer);
         if (code === 0) resolve(out.trim());
-        else if (n < spec.retries) attempt(n + 1).then(resolve, reject);
         else {
-          const diagnostic = [
-            `${spec.command} failed after ${spec.retries + 1} attempt(s): exit ${code}`,
+          const attemptDiagnostic = [
+            `attempt ${n + 1}: exit ${code}`,
             out ? `stdout:\n${out}` : '',
             err ? `stderr:\n${err}` : '',
           ]
             .filter(Boolean)
             .join('\n');
-          reject(new Error(diagnostic));
+          const diagnostics = [...failedAttempts, attemptDiagnostic];
+          if (n < spec.retries) attempt(n + 1, diagnostics).then(resolve, reject);
+          else {
+            const diagnostic = [
+              `${spec.command} failed after ${spec.retries + 1} attempt(s)`,
+              ...diagnostics,
+            ].join('\n');
+            reject(new Error(diagnostic));
+          }
         }
       });
     });
@@ -554,6 +561,7 @@ export function redactDiagnostic(value: string): string {
     'gi',
   );
   return value
+    .replace(/(^|\r?\n)(\s*(?:proxy-)?authorization\s*:\s*)[^\r\n]*/gi, '$1$2[REDACTED]')
     .replace(assignedSecret, '$1[REDACTED]')
     .replace(/\bBearer\s+[-._~+/=A-Za-z0-9]{8,}\b/gi, 'Bearer [REDACTED]')
     .replace(/\b(?:ghp|github_pat|sk|xox[baprs])[-_A-Za-z0-9]+\b/gi, '[REDACTED]');

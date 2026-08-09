@@ -327,6 +327,33 @@ test('failed commands preserve complete multiline stdout and stderr diagnostics'
   );
 });
 
+test('failed retries retain diagnostics from every unsuccessful attempt', async () => {
+  await assert.rejects(
+    () =>
+      runCommand(
+        command(
+          {
+            command: 'node',
+            args: [
+              '-e',
+              "process.stdout.write('retry stdout\\n'); process.stderr.write('retry stderr\\n'); process.exit(17)",
+            ],
+            retries: 1,
+          },
+          0,
+        ),
+      ),
+    (error) => {
+      assert.match(error.message, /failed after 2 attempt\(s\)/);
+      assert.match(error.message, /attempt 1: exit 17/);
+      assert.match(error.message, /attempt 2: exit 17/);
+      assert.equal((error.message.match(/retry stdout/g) ?? []).length, 2);
+      assert.equal((error.message.match(/retry stderr/g) ?? []).length, 2);
+      return true;
+    },
+  );
+});
+
 test('PR closing reference uses the claimed issue exactly once for creation and recovery', () => {
   assert.equal(withIssueClosingReference('Summary', 17), 'Summary\n\nCloses #17');
   assert.equal(
@@ -913,6 +940,16 @@ test('diagnostic redaction preserves safe multiline output and hides common cred
   assert.match(output, /https:\/\/example.test\/log/);
   assert.doesNotMatch(output, /secret-value|p@ss/);
   assert.match(output, /\[REDACTED\]/);
+});
+
+test('diagnostic redaction removes complete Authorization header values', () => {
+  const output = redactDiagnostic(
+    'Authorization: Basic dXNlcjpwYXNzd29yZA==\nProxy-Authorization: Bearer proxy-secret\nurl=https://example.test/log',
+  );
+  assert.match(output, /Authorization: \[REDACTED\]/);
+  assert.match(output, /Proxy-Authorization: \[REDACTED\]/);
+  assert.doesNotMatch(output, /dXNlcjpwYXNzd29yZA==|proxy-secret/);
+  assert.match(output, /https:\/\/example\.test\/log/);
 });
 
 test('legacy lastError-only state remains readable in both status modes', () => {
