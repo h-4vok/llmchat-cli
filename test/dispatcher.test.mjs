@@ -906,9 +906,12 @@ test('status remains concise by default and returns exact verbose diagnostics on
     join(h.root, '.llmchat', 'state.json'),
     JSON.stringify({
       issue: 9,
+      pr: 42,
       status: 'worker_running',
       lastError: 'short summary',
       lastErrorVerbose: 'line one\nUnicode: café\nline three',
+      branch: 'codex/issue-9',
+      workerRecoveryCount: 3,
     }),
   );
   const status = spawnSync(
@@ -920,16 +923,27 @@ test('status remains concise by default and returns exact verbose diagnostics on
     },
   );
   assert.equal(status.status, 0);
-  assert.match(status.stdout, /worker_running/);
-  assert.match(status.stdout, /short summary/);
-  assert.doesNotMatch(status.stdout, /Unicode: café/);
+  assert.deepEqual(JSON.parse(status.stdout), {
+    issue: 9,
+    pr: 42,
+    status: 'worker_running',
+    lastError: 'short summary',
+  });
   const verbose = spawnSync(
     process.execPath,
     [join(process.cwd(), 'dist', 'dispatcher.js'), '--status', '--verbose'],
     { cwd: h.root, encoding: 'utf8' },
   );
   assert.equal(verbose.status, 0);
-  assert.match(verbose.stdout, /Unicode: café/);
+  assert.deepEqual(JSON.parse(verbose.stdout), {
+    issue: 9,
+    pr: 42,
+    status: 'worker_running',
+    lastError: 'short summary',
+    lastErrorVerbose: 'line one\nUnicode: café\nline three',
+    branch: 'codex/issue-9',
+    workerRecoveryCount: 3,
+  });
 });
 
 test('diagnostic redaction preserves safe multiline output and hides common credentials', () => {
@@ -950,6 +964,11 @@ test('diagnostic redaction removes complete Authorization header values', () => 
   assert.match(output, /Proxy-Authorization: \[REDACTED\]/);
   assert.doesNotMatch(output, /dXNlcjpwYXNzd29yZA==|proxy-secret/);
   assert.match(output, /https:\/\/example\.test\/log/);
+});
+
+test('diagnostic redaction removes short Bearer credentials', () => {
+  const output = redactDiagnostic('Bearer abc\nBearer secret\nBearer a');
+  assert.equal(output, 'Bearer [REDACTED]\nBearer [REDACTED]\nBearer [REDACTED]');
 });
 
 test('diagnostic redaction removes URL userinfo and complete cookie header values', () => {

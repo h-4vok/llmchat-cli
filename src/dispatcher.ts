@@ -565,7 +565,7 @@ export function redactDiagnostic(value: string): string {
     .replace(/(^|\r?\n)(\s*(?:set-)?cookie\s*:\s*)[^\r\n]*/gi, '$1$2[REDACTED]')
     .replace(/\b([a-z][a-z0-9+.-]*:\/\/)[^\s\/@]*@/gi, '$1[REDACTED]@')
     .replace(assignedSecret, '$1[REDACTED]')
-    .replace(/\bBearer\s+[-._~+/=A-Za-z0-9]{8,}\b/gi, 'Bearer [REDACTED]')
+    .replace(/\bBearer\s+[^\s,;]+/gi, 'Bearer [REDACTED]')
     .replace(/\b(?:ghp|github_pat|sk|xox[baprs])[-_A-Za-z0-9]+\b/gi, '[REDACTED]');
 }
 
@@ -1592,7 +1592,12 @@ async function main() {
     const current = readState();
     const displayed = args.includes('--verbose')
       ? current
-      : Object.fromEntries(Object.entries(current).filter(([key]) => key !== 'lastErrorVerbose'));
+      : {
+          issue: current.issue,
+          pr: current.pr,
+          status: current.status,
+          lastError: current.lastError,
+        };
     console.log(JSON.stringify(displayed, null, 2));
     return;
   }
