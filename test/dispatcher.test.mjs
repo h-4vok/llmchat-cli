@@ -811,6 +811,11 @@ test('failed PR CI returns the issue to a recovered Worker without local npm gat
     h.runs.some((run) => run.command === 'npm'),
     false,
   );
+  const ciFailure = h.saves.find((state) => state.status === 'ci_failed');
+  assertPersistedDiagnostic(ciFailure, 'ci failed', '[CI] pr-checks: FAILURE', [
+    /issue #1/,
+    /PR #14/,
+  ]);
 });
 
 test('successful role process without a published review blocks the dispatcher', async () => {
@@ -884,6 +889,74 @@ test('diagnostic redaction preserves safe multiline output and hides common cred
   assert.match(output, /https:\/\/example.test\/log/);
   assert.doesNotMatch(output, /secret-value|p@ss/);
   assert.match(output, /\[REDACTED\]/);
+});
+
+test('legacy lastError-only state remains readable in both status modes', () => {
+  const h = harness();
+  mkdirSync(join(h.root, '.llmchat'), { recursive: true });
+  writeFileSync(
+    join(h.root, '.llmchat', 'state.json'),
+    JSON.stringify({ issue: 9, status: 'blocked', lastError: 'legacy failure summary' }),
+  );
+  for (const args of [['--status'], ['--status', '--verbose']]) {
+    const result = spawnSync(
+      process.execPath,
+      [join(process.cwd(), 'dist', 'dispatcher.js'), ...args],
+      {
+        cwd: h.root,
+        encoding: 'utf8',
+      },
+    );
+    assert.equal(result.status, 0, result.stderr);
+    assert.deepEqual(JSON.parse(result.stdout), {
+      issue: 9,
+      status: 'blocked',
+      lastError: 'legacy failure summary',
+    });
+  }
+});
+
+test('successful state without errors remains unchanged in both status modes', () => {
+  const h = harness();
+  mkdirSync(join(h.root, '.llmchat'), { recursive: true });
+  writeFileSync(
+    join(h.root, '.llmchat', 'state.json'),
+    JSON.stringify({ issue: 9, status: 'claimed' }),
+  );
+  for (const args of [['--status'], ['--status', '--verbose']]) {
+    const result = spawnSync(
+      process.execPath,
+      [join(process.cwd(), 'dist', 'dispatcher.js'), ...args],
+      {
+        cwd: h.root,
+        encoding: 'utf8',
+      },
+    );
+    assert.equal(result.status, 0, result.stderr);
+    assert.deepEqual(JSON.parse(result.stdout), { issue: 9, status: 'claimed' });
+  }
+});
+
+test('verbose status preserves quotes and shell-like diagnostic text exactly', () => {
+  const h = harness();
+  const diagnostic = 'stdout: "quoted"\nstderr: $(whoami) & echo %PATH%\nexit=17';
+  mkdirSync(join(h.root, '.llmchat'), { recursive: true });
+  writeFileSync(
+    join(h.root, '.llmchat', 'state.json'),
+    JSON.stringify({
+      issue: 9,
+      status: 'blocked',
+      lastError: 'short summary',
+      lastErrorVerbose: diagnostic,
+    }),
+  );
+  const verbose = spawnSync(
+    process.execPath,
+    [join(process.cwd(), 'dist', 'dispatcher.js'), '--status', '--verbose'],
+    { cwd: h.root, encoding: 'utf8' },
+  );
+  assert.equal(verbose.status, 0, verbose.stderr);
+  assert.equal(JSON.parse(verbose.stdout).lastErrorVerbose, diagnostic);
 });
 
 test('prepareRecovery preserves PR and removes only the issue from completion', () => {
