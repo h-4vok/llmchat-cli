@@ -175,6 +175,21 @@ test('commands use argv, exit codes, retries, timeout and no shell contract', as
     /failed after 2 attempt/,
   );
   await assert.rejects(
+    runCommand(
+      command(
+        {
+          command: 'node',
+          args: [
+            '-e',
+            "console.log('stdout detail'); console.error('stderr detail'); process.exit(2)",
+          ],
+        },
+        0,
+      ),
+    ),
+    /stdout:\nstdout detail[\s\S]*stderr:\nstderr detail/,
+  );
+  await assert.rejects(
     () =>
       runCommand(
         command({ command: 'node', args: ['-e', 'setTimeout(()=>{},1000)'], timeoutMs: 10 }, 0),

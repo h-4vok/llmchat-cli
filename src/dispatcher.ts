@@ -355,7 +355,7 @@ export function runCommand(spec: Spec | undefined): Promise<string> {
         else
           reject(
             new Error(
-              `${spec.command} failed after ${spec.retries + 1} attempt(s): exit ${code}${err.trim() ? `: ${err.trim()}` : ''}`,
+              `${spec.command} failed after ${spec.retries + 1} attempt(s): exit ${code}\nstdout:\n${out}\nstderr:\n${err}`,
             ),
           );
       });
