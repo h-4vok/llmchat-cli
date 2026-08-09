@@ -555,7 +555,8 @@ function status(d: Deps, issue: number, next: Status, extra: Partial<State> = {}
 }
 
 export function redactDiagnostic(value: string): string {
-  const sensitiveKey = String.raw`(?:authorization|(?:[A-Za-z][A-Za-z0-9_]*_)?token|(?:[A-Za-z][A-Za-z0-9_]*_)?api[_-]?key|(?:[A-Za-z][A-Za-z0-9_]*_)?secret|(?:[A-Za-z][A-Za-z0-9_]*_)?password|(?:[A-Za-z][A-Za-z0-9_]*_)?cookie|(?:[A-Za-z][A-Za-z0-9_]*_)?credentials?)`;
+  const credentialKey = String.raw`(?:[A-Za-z][A-Za-z0-9_-]*[-_])?(?:token|api[_-]?key|secret|password|cookie|credentials?)(?:[-_][A-Za-z0-9_-]*)?`;
+  const sensitiveKey = String.raw`(?:authorization|${credentialKey})`;
   const assignedSecret = new RegExp(
     String.raw`((?:["']${sensitiveKey}["']|${sensitiveKey})\s*[:=]\s*)(?!(?:\[REDACTED\])(?=$|[\s,;\]}]))(?:Bearer\s+)?(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^\s,;\]}]+)`,
     'gi',

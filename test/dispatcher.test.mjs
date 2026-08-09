@@ -974,6 +974,23 @@ test('diagnostic redaction preserves safe multiline output and hides common cred
   assert.match(output, /\[REDACTED\]/);
 });
 
+test('diagnostic redaction exactly preserves hyphenated credential-key assignments', () => {
+  const diagnostic = [
+    'X-Secret-Value: secret-123',
+    'X-Credentials-Blob=credentials-123',
+    'X-Password-Hint: password-123',
+  ].join('\n');
+  const expected = [
+    'X-Secret-Value: [REDACTED]',
+    'X-Credentials-Blob=[REDACTED]',
+    'X-Password-Hint: [REDACTED]',
+  ].join('\n');
+  const output = redactDiagnostic(diagnostic);
+
+  assert.equal(output, expected);
+  assert.equal(redactDiagnostic(output), expected);
+});
+
 test('diagnostic redaction exactly preserves bare and prefixed header diagnostics', () => {
   const diagnostic = [
     'Authorization: Basic dXNlcjpwYXNzd29yZA==',
