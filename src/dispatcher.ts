@@ -657,14 +657,16 @@ function publishHumanReviewGuide(d: Deps, pr: PullRequest, round: number): void 
   if (!guide || !pr.headRefOid)
     throw new Error('Worker evidence must contain a complete [Human Verification] guide');
   const commit = pr.headRefOid;
-  if (
-    (pr.comments ?? []).some(
-      (comment) =>
-        comment.body?.trim().startsWith('[Human Review Guide]') &&
-        comment.body?.match(/\bcommit=([^\s]+)/i)?.[1] === commit,
-    )
-  )
-    return;
+  const currentGuides = (pr.comments ?? []).filter(
+    (comment) =>
+      comment.body?.trim().startsWith('[Human Review Guide]') &&
+      comment.body?.match(/\bcommit=([^\s]+)/i)?.[1] === commit,
+  );
+  if (currentGuides.length > 1)
+    throw new Error(
+      `Expected exactly one [Human Review Guide] for commit ${commit}; found duplicates`,
+    );
+  if (currentGuides.length === 1) return;
   d.comment(
     pr.number,
     `[Human Review Guide] round=${round} commit=${commit}\n\n` +

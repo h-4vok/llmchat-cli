@@ -162,7 +162,7 @@ function harness(
     ...(overrides.publishEvidence ?? {}),
   };
   const humanVerification = overrides.humanVerification ?? true;
-  if (overrides.existingHumanGuide)
+  for (let guide = 0; guide < (overrides.existingHumanGuides ?? 0); guide += 1)
     pr.comments.push({ body: '[Human Review Guide] round=1 commit=abc1' });
   const checkSequences = overrides.checkSequences ?? [pr.statusCheckRollup];
   let checkIndex = 0;
@@ -328,8 +328,16 @@ test('dispatcher runs Worker, QA, then Staff and uses PR evidence instead of JSO
 });
 
 test('existing human guide for the current commit is not published twice', async () => {
-  const h = harness(undefined, { existingHumanGuide: true });
+  const h = harness(undefined, { existingHumanGuides: 1 });
   await dispatch(h.cfg, h.deps);
+  assert.equal(h.comments.filter(([, body]) => body.startsWith('[Human Review Guide]')).length, 0);
+});
+
+test('duplicate human guides for the current commit block ready_for_human_merge', async () => {
+  const h = harness(undefined, { existingHumanGuides: 2 });
+  await dispatch(h.cfg, h.deps);
+  assert.equal(h.state().status, 'worker_recovery_pending');
+  assert.match(h.state().lastError, /Expected exactly one \[Human Review Guide\].*duplicates/);
   assert.equal(h.comments.filter(([, body]) => body.startsWith('[Human Review Guide]')).length, 0);
 });
 
