@@ -13,6 +13,7 @@ import {
   prepareRecovery,
   recoverStaleLock,
   workerBranchName,
+  withIssueClosingReference,
   resetRunState,
   runCommand,
 } from '../dist/dispatcher.js';
@@ -40,6 +41,8 @@ function harness(
   const saves = [];
   const comments = [];
   const runs = [];
+  const prBodyUpdates = [];
+  const createdPrBodies = [];
   const reviews = [];
   const pr = {
     number: 14,
@@ -47,6 +50,7 @@ function harness(
     baseRefName: 'staging',
     headRefName: overrides.headRefName ?? 'codex/issue-1',
     headRefOid: 'abc0',
+    body: overrides.prBody ?? 'Summary',
     mergeStateStatus: 'CLEAN',
     mergeable: 'MERGEABLE',
     comments: [],
@@ -90,6 +94,12 @@ function harness(
       if (role === 'worker') {
         workerCount += 1;
         pr.headRefOid = `abc${workerCount}`;
+        if (overrides.workerCreatesPr) {
+          // Model the Worker passing the dispatcher-owned payload directly to
+          // `gh pr create --body-file`; this is the initial remote PR body.
+          pr.body = spec.env.LLMCHAT_PR_BODY;
+          createdPrBodies.push(pr.body);
+        }
         spec.onStart?.(1000 + workerCount);
         spec.onHeartbeat?.();
         if (publishEvidence.worker)
@@ -127,6 +137,12 @@ function harness(
       pr.statusCheckRollup = checkSequences[Math.min(checkIndex++, checkSequences.length - 1)];
       return structuredClone(pr);
     },
+    updatePullRequestBody: async (number, body) => {
+      assert.equal(number, pr.number);
+      pr.body = body;
+      prBodyUpdates.push({ number, body });
+    },
+    pullRequestBody: () => pr.body,
     now: () => Date.now(),
     pid: () => process.pid,
     processAlive: (pid) => pid > 0 && pid !== -1,
@@ -149,6 +165,8 @@ function harness(
       state = next;
     },
     counts: () => ({ workerCount, qaCount, staffCount }),
+    prBodyUpdates,
+    createdPrBodies,
     cfg: { ...baseConfig, ...overrides.config },
   };
 }
@@ -172,6 +190,15 @@ test('commands use argv, exit codes, retries, timeout and no shell contract', as
   );
 });
 
+test('PR closing reference uses the claimed issue exactly once for creation and recovery', () => {
+  assert.equal(withIssueClosingReference('Summary', 17), 'Summary\n\nCloses #17');
+  assert.equal(
+    withIssueClosingReference('Summary\n\nCloses #1\nClose #17\nclosed #99', 17),
+    'Summary\n\nCloses #17',
+  );
+  assert.throws(() => withIssueClosingReference('', 0), /issue number must be positive/);
+});
+
 test('dispatcher runs Worker, QA, then Staff and uses PR evidence instead of JSON', async () => {
   const h = harness();
   await dispatch(h.cfg, h.deps);
@@ -189,15 +216,91 @@ test('dispatcher runs Worker, QA, then Staff and uses PR evidence instead of JSO
       ['--sandbox', 'read-only'],
     ],
   );
+  assert.equal(h.runs[0].env.LLMCHAT_ISSUE_NUMBER, '1');
   assert.equal(h.reviews[0].body.startsWith('[QA/SDET Review]'), true);
   assert.equal(h.reviews[1].body.startsWith('[Staff Review]'), true);
   assert.equal(h.state().branch, 'codex/issue-1');
   assert.equal(h.state().stagingBaseSha, 'staging-sha-1');
 });
 
+test('create and recovery smoke paths capture the persisted claimed-issue PR body', async () => {
+  const h = harness([{ number: 17, title: 'seventeen', body: 'criteria' }], {
+    prBody: 'Summary\n\nCloses #1\nClose #99',
+  });
+  await dispatch(h.cfg, h.deps);
+  // This is the create-path handoff: the Worker receives the exact body contract
+  // that it must pass to `gh pr create`.
+  const workerInput =
+    h.runs.find((run) => run.input?.includes('Use the worker skill'))?.input ?? '';
+  assert.match(workerInput, /gh pr create\/edit \(or equivalent\) to persist that body/);
+  assert.match(workerInput, /state-authorized closing reference/);
+
+  // This is the recovery/update path: the captured `gh pr edit --body-file`
+  // equivalent receives one normalized reference and no stale references.
+  assert.deepEqual(h.prBodyUpdates, [{ number: 14, body: 'Summary\n\nCloses #17' }]);
+  assert.equal((h.prBodyUpdates[0].body.match(/^Closes #17$/gm) ?? []).length, 1);
+});
+
+test('dispatcher-generated body is used by the initial PR creation path', async () => {
+  const h = harness([{ number: 17, title: 'seventeen', body: 'criteria' }], {
+    workerCreatesPr: true,
+  });
+  await dispatch(h.cfg, h.deps);
+  const workerInput =
+    h.runs.find((run) => run.input?.includes('Use the worker skill'))?.input ?? '';
+  assert.equal(h.runs[0].env.LLMCHAT_PR_BODY, 'Closes #17');
+  assert.deepEqual(h.createdPrBodies, ['Closes #17']);
+  assert.equal((h.createdPrBodies[0].match(/^Closes #17$/gm) ?? []).length, 1);
+  assert.match(workerInput, /dispatcher has generated the initial PR body in LLMCHAT_PR_BODY/);
+  assert.match(workerInput, /gh pr create using --body-file/);
+});
+
 test('worker branch convention is deterministic and rejects invalid issue numbers', () => {
   assert.equal(workerBranchName(16), 'codex/issue-16');
   assert.throws(() => workerBranchName(0), /issue number must be positive/);
+});
+
+test('PR closing references preserve authorized linked issues and remove stale ones', () => {
+  assert.equal(
+    withIssueClosingReference('Summary\n\nCloses #1\nClose #17\nClosed #99', 17, [39]),
+    'Summary\n\nCloses #17\nCloses #39',
+  );
+});
+
+test('review cap pauses before a replacement Worker is launched', async () => {
+  const h = harness([{ number: 1, title: 'one' }], {
+    qaVerdicts: ['changes_requested'],
+    config: { maxReviewRounds: 1 },
+  });
+  await dispatch(h.cfg, h.deps);
+  assert.equal(h.state().status, 'review_cap_pending');
+  assert.equal(h.state().reviewRound, 2);
+  assert.equal(h.counts().workerCount, 1);
+  assert.deepEqual(h.state().reviewCap.outstandingFindingIds, []);
+});
+
+test('a local HITL budget and steer are included in the resumed Worker context', async () => {
+  const h = harness([{ number: 1, title: 'one' }], {
+    initialState: {
+      issue: 1,
+      pr: 14,
+      branch: 'codex/issue-1',
+      status: 'worker_recovery_pending',
+      reviewRound: 2,
+      reviewCap: {
+        capRound: 1,
+        additionalRounds: 1,
+        waivedFindingIds: ['Q4'],
+        outstandingFindingIds: ['Q4'],
+        decisionSha: 'abc0',
+        steer: 'Do not change GitHub configuration.',
+      },
+    },
+    config: { maxReviewRounds: 1 },
+  });
+  h.deps.checkoutWorkerBranch = () => {};
+  await dispatch(h.cfg, h.deps);
+  assert.match(h.runs[0].input, /HITL steer \(binding\): Do not change GitHub configuration/);
 });
 
 test('new branch preparation refuses to overwrite an existing worker branch', () => {
