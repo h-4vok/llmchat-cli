@@ -426,6 +426,12 @@ export function command(
     throw new Error(
       'commands must be argv arrays or {command,args}; shell operators are not allowed',
     );
+  if (!Array.isArray(value)) {
+    if (!Array.isArray(value.args) || value.args.some((arg) => typeof arg !== 'string'))
+      throw new Error(
+        'commands must provide args as a string array; migrate each role command to { command, args, timeoutMs, retries }',
+      );
+  }
   return {
     command: Array.isArray(value) ? value[0] : value.command,
     args: Array.isArray(value) ? value.slice(1) : value.args,
