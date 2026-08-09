@@ -237,6 +237,21 @@ test('dispatcher runs Worker, QA, then Staff and uses PR evidence instead of JSO
   assert.equal(h.state().stagingBaseSha, 'staging-sha-1');
 });
 
+test('Worker failures persist concise summaries and complete diagnostics', async () => {
+  const h = harness([{ number: 1, title: 'a' }]);
+  const diagnostic =
+    'worker command exited 2\nstdout:\npartial result\nstderr:\nfailed to update PR https://example.test/pr/14';
+  h.deps.run = async (spec) => {
+    if (spec.input?.includes('Use the worker skill')) throw new Error(diagnostic);
+    return 'completed';
+  };
+
+  await dispatch(h.cfg, h.deps);
+
+  assert.equal(h.state().status, 'worker_recovery_pending');
+  assertPersistedErrorContract(h.state(), diagnostic);
+});
+
 test('worker branch convention is deterministic and rejects invalid issue numbers', () => {
   assert.equal(workerBranchName(16), 'codex/issue-16');
   assert.throws(() => workerBranchName(0), /issue number must be positive/);
