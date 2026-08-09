@@ -42,6 +42,7 @@ function harness(
   const comments = [];
   const runs = [];
   const prBodyUpdates = [];
+  const createdPrBodies = [];
   const reviews = [];
   const pr = {
     number: 14,
@@ -93,6 +94,12 @@ function harness(
       if (role === 'worker') {
         workerCount += 1;
         pr.headRefOid = `abc${workerCount}`;
+        if (overrides.workerCreatesPr) {
+          // Model the Worker passing the dispatcher-owned payload directly to
+          // `gh pr create --body-file`; this is the initial remote PR body.
+          pr.body = spec.env.LLMCHAT_PR_BODY;
+          createdPrBodies.push(pr.body);
+        }
         spec.onStart?.(1000 + workerCount);
         spec.onHeartbeat?.();
         if (publishEvidence.worker)
@@ -159,6 +166,7 @@ function harness(
     },
     counts: () => ({ workerCount, qaCount, staffCount }),
     prBodyUpdates,
+    createdPrBodies,
     cfg: { ...baseConfig, ...overrides.config },
   };
 }
@@ -233,16 +241,18 @@ test('create and recovery smoke paths capture the persisted claimed-issue PR bod
   assert.equal((h.prBodyUpdates[0].body.match(/^Closes #17$/gm) ?? []).length, 1);
 });
 
-test('worker creation contract includes the normalized claimed-issue body', async () => {
-  const h = harness([{ number: 17, title: 'seventeen', body: 'criteria' }]);
+test('dispatcher-generated body is used by the initial PR creation path', async () => {
+  const h = harness([{ number: 17, title: 'seventeen', body: 'criteria' }], {
+    workerCreatesPr: true,
+  });
   await dispatch(h.cfg, h.deps);
   const workerInput =
     h.runs.find((run) => run.input?.includes('Use the worker skill'))?.input ?? '';
-  assert.match(
-    workerInput,
-    /When creating or updating the PR, preserve every state-authorized closing reference/,
-  );
-  assert.match(workerInput, /Use gh pr create\/edit \(or equivalent\) to persist that body/);
+  assert.equal(h.runs[0].env.LLMCHAT_PR_BODY, 'Closes #17');
+  assert.deepEqual(h.createdPrBodies, ['Closes #17']);
+  assert.equal((h.createdPrBodies[0].match(/^Closes #17$/gm) ?? []).length, 1);
+  assert.match(workerInput, /dispatcher has generated the initial PR body in LLMCHAT_PR_BODY/);
+  assert.match(workerInput, /gh pr create using --body-file/);
 });
 
 test('worker branch convention is deterministic and rejects invalid issue numbers', () => {

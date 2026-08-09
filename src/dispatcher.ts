@@ -512,10 +512,11 @@ function rolePrompt(
   feedback: string,
   headSha: string | undefined,
   runId: string,
+  initialPrBody?: string,
 ): string {
   const issueContext = issue.body?.trim() || '(issue body unavailable; inspect it with gh)';
   if (role === 'worker')
-    return `Use the worker skill for GitHub issue #${issue.number}: ${issue.title}. This is dispatcher recovery run ${runId}, review round ${round}. Continue the existing task in the current checkout. ${pr ? `An existing PR is #${pr}; update that PR and never create a second PR.` : 'Create exactly one PR targeting staging if one does not exist.'} Do not merge. The claimed issue number is ${issue.number} (also in LLMCHAT_ISSUE_NUMBER). When creating or updating the PR, preserve every state-authorized closing reference supplied in the recovery context exactly once; do not add or remove other issue links without dispatcher instruction. Use gh pr create/edit (or equivalent) to persist that body. Inspect the issue, current PR diff, CI checks, mergeability, and all [QA/SDET Review] and [Staff Review] feedback. If the PR is CONFLICTING or DIRTY against staging, update the branch from staging, resolve every conflict, run the required checks, and do not report ready_for_review until the PR is clean and mergeable. Resolve every actionable finding and publish one PR conversation comment beginning with [Worker], including round=${round}, status=ready_for_review, pr=<number>, base=staging, and commit=<current head SHA>. The dispatcher will verify that comment and the PR mergeability on GitHub. Never delete or modify .llmchat/state.json or dispatcher runtime state. Exit 0 only after the work, conflict resolution, and comment are complete; do not return JSON. Issue body:\n${issueContext}\n${context ? `Recovered context:\n${context}\n` : ''}${feedback ? `Actionable feedback to resolve:\n${feedback}\n` : ''}At the end, print a plain-text line exactly like WORKER_RESULT pr=<number> base=staging. All command success/failure is communicated by the process exit code.`;
+    return `Use the worker skill for GitHub issue #${issue.number}: ${issue.title}. This is dispatcher recovery run ${runId}, review round ${round}. Continue the existing task in the current checkout. ${pr ? `An existing PR is #${pr}; update that PR and never create a second PR.` : 'Create exactly one PR targeting staging if one does not exist.'} Do not merge. The claimed issue number is ${issue.number} (also in LLMCHAT_ISSUE_NUMBER). The dispatcher has generated the initial PR body in LLMCHAT_PR_BODY: ${JSON.stringify(initialPrBody ?? '')}. If creating a PR, pass that exact value to gh pr create using --body-file (or an equivalent file-based body argument); do not construct the closing reference yourself. When updating the PR, preserve every state-authorized closing reference supplied in the recovery context exactly once; do not add or remove other issue links without dispatcher instruction. Use gh pr create/edit (or equivalent) to persist that body. Inspect the issue, current PR diff, CI checks, mergeability, and all [QA/SDET Review] and [Staff Review] feedback. If the PR is CONFLICTING or DIRTY against staging, update the branch from staging, resolve every conflict, run the required checks, and do not report ready_for_review until the PR is clean and mergeable. Resolve every actionable finding and publish one PR conversation comment beginning with [Worker], including round=${round}, status=ready_for_review, pr=<number>, base=staging, and commit=<current head SHA>. The dispatcher will verify that comment and the PR mergeability on GitHub. Never delete or modify .llmchat/state.json or dispatcher runtime state. Exit 0 only after the work, conflict resolution, and comment are complete; do not return JSON. Issue body:\n${issueContext}\n${context ? `Recovered context:\n${context}\n` : ''}${feedback ? `Actionable feedback to resolve:\n${feedback}\n` : ''}At the end, print a plain-text line exactly like WORKER_RESULT pr=<number> base=staging. All command success/failure is communicated by the process exit code.`;
   if (role === 'qa')
     return `Use the qa-sdet skill for GitHub issue #${issue.number}: ${issue.title}. Review PR #${pr} against staging before Staff. Current head is ${headSha ?? 'unknown'} and this is review round ${round}. Inspect the acceptance criteria, diff, CI check results, regression coverage, and smoke evidence. Publish directly to the PR exactly one review beginning [QA/SDET Review] round=${round} verdict=passed, changes_requested, or blocked. Include Q<n> findings, exact evidence, and commit=${headSha ?? 'current'}. Do not edit code or merge. Exit 0 after publishing the review; do not return JSON. Issue body:\n${issueContext}`;
   return `Use the staff-reviewer skill for GitHub issue #${issue.number}: ${issue.title}. Review PR #${pr} against staging after QA has passed. Current head is ${headSha ?? 'unknown'} and this is review round ${round}. Perform the independent adversarial review for design, security, regressions, boundaries, and abuse cases. Publish directly to the PR exactly one review beginning [Staff Review] round=${round} verdict=approved or changes_requested, include S<n> findings when needed, and include commit=${headSha ?? 'current'}. Do not edit code or merge. Exit 0 after publishing the review; do not return JSON. Issue body:\n${issueContext}`;
@@ -738,13 +739,32 @@ async function runWorker(
   });
   const spec = roleCommand(cfg.workerCommand, issue.number, cfg);
   if (!spec) throw new Error('workerCommand is required');
+  const initialPrBody = withIssueClosingReference(
+    '',
+    issue.number,
+    d.load().linkedClosingIssues ?? [],
+  );
   const output = await d.run(
     withWorkerLifecycle(
       d,
       {
         ...spec,
-        env: { ...spec.env, LLMCHAT_ISSUE_NUMBER: String(issue.number) },
-        input: rolePrompt(issue, 'worker', pr, round, context, feedback, d.load().headSha, runId),
+        env: {
+          ...spec.env,
+          LLMCHAT_ISSUE_NUMBER: String(issue.number),
+          LLMCHAT_PR_BODY: initialPrBody,
+        },
+        input: rolePrompt(
+          issue,
+          'worker',
+          pr,
+          round,
+          context,
+          feedback,
+          d.load().headSha,
+          runId,
+          initialPrBody,
+        ),
       },
       issue.number,
       runId,
