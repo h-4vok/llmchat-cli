@@ -6,6 +6,7 @@ import { spawnSync } from 'node:child_process';
 import { test } from 'node:test';
 import {
   acquire,
+  childProcessInvocation,
   command,
   dispatcherLockPath,
   dispatch,
@@ -17,6 +18,28 @@ import {
   resetRunState,
   runCommand,
 } from '../dist/dispatcher.js';
+
+test('Windows batch commands use cmd.exe without Node shell mode', () => {
+  assert.deepEqual(
+    childProcessInvocation(
+      'C:\\tools\\codex.cmd',
+      ['exec', '--full-auto'],
+      'win32',
+      'C:\\Windows\\System32\\cmd.exe',
+    ),
+    {
+      command: 'C:\\Windows\\System32\\cmd.exe',
+      args: ['/d', '/s', '/c', 'C:\\tools\\codex.cmd', 'exec', '--full-auto'],
+    },
+  );
+});
+
+test('non-batch commands preserve their executable and arguments', () => {
+  assert.deepEqual(childProcessInvocation('codex', ['exec'], 'win32'), {
+    command: 'codex',
+    args: ['exec'],
+  });
+});
 
 const baseConfig = {
   baseBranch: 'staging',

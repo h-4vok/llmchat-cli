@@ -240,13 +240,27 @@ function resolveExecutable(commandName: string): string {
   }
 }
 
+export function childProcessInvocation(
+  executable: string,
+  args: string[],
+  platform = process.platform,
+  commandProcessor = process.env.ComSpec,
+): { command: string; args: string[] } {
+  if (platform === 'win32' && /\.(cmd|bat)$/i.test(executable)) {
+    return {
+      command: commandProcessor || 'cmd.exe',
+      args: ['/d', '/s', '/c', executable, ...args],
+    };
+  }
+  return { command: executable, args };
+}
+
 function gh(args: string[]): string {
   const executable = resolveExecutable('gh');
-  const useWindowsShell = process.platform === 'win32' && /\.(cmd|bat)$/i.test(executable);
-  return execFileSync(useWindowsShell ? 'gh' : executable, args, {
+  const launch = childProcessInvocation(executable, args);
+  return execFileSync(launch.command, launch.args, {
     cwd: root,
     encoding: 'utf8',
-    shell: useWindowsShell,
     stdio: ['ignore', 'pipe', 'pipe'],
   }).trim();
 }
@@ -385,17 +399,15 @@ export function command(
 export function runCommand(spec: Spec | undefined): Promise<string> {
   if (!spec) return Promise.resolve('');
   const executable = resolveExecutable(spec.command);
-  const useWindowsShell = process.platform === 'win32' && /\.(cmd|bat)$/i.test(executable);
-  const launchExecutable = useWindowsShell ? spec.command : executable;
+  const launch = childProcessInvocation(executable, spec.args);
   const attempt = (n: number): Promise<string> =>
     new Promise((resolve, reject) => {
       console.error(
         `[sloop] ejecutando (${n + 1}/${spec.retries + 1}): ${spec.command} ${spec.args.join(' ')}`,
       );
-      const child = spawn(launchExecutable, spec.args, {
+      const child = spawn(launch.command, launch.args, {
         cwd: root,
         windowsHide: true,
-        shell: useWindowsShell,
         env: spec.env ? { ...process.env, ...spec.env } : process.env,
       });
       spec.onStart?.(child.pid ?? -1);
