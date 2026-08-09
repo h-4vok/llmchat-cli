@@ -14,6 +14,7 @@ import {
   prepareRecovery,
   recoverStaleLock,
   runSyncCommand,
+  redactDiagnostic,
   workerBranchName,
   withIssueClosingReference,
   resetRunState,
@@ -159,6 +160,8 @@ function harness(
   let staffCount = 0;
   const qaVerdicts = overrides.qaVerdicts ?? ['passed'];
   const staffVerdicts = overrides.staffVerdicts ?? ['approved'];
+  const qaBodies = overrides.qaBodies;
+  const staffBodies = overrides.staffBodies;
   const publishEvidence = {
     worker: true,
     qa: true,
@@ -220,7 +223,9 @@ function harness(
         const verdict = qaVerdicts[qaCount - 1] ?? qaVerdicts.at(-1);
         if (publishEvidence.qa)
           reviews.push({
-            body: `[QA/SDET Review] round=${round} verdict=${verdict} commit=${pr.headRefOid}`,
+            body:
+              qaBodies?.[qaCount - 1] ??
+              `[QA/SDET Review] round=${round} verdict=${verdict} commit=${pr.headRefOid}`,
             commitId: pr.headRefOid,
             submittedAt: `${qaCount}`,
           });
@@ -231,7 +236,9 @@ function harness(
         const verdict = staffVerdicts[staffCount - 1] ?? staffVerdicts.at(-1);
         if (publishEvidence.staff)
           reviews.push({
-            body: `[Staff Review] round=${round} verdict=${verdict} commit=${pr.headRefOid}`,
+            body:
+              staffBodies?.[staffCount - 1] ??
+              `[Staff Review] round=${round} verdict=${verdict} commit=${pr.headRefOid}`,
             commitId: pr.headRefOid,
             submittedAt: `${staffCount}`,
           });
@@ -293,6 +300,57 @@ test('commands use argv, exit codes, retries, timeout and no shell contract', as
         command({ command: 'node', args: ['-e', 'setTimeout(()=>{},1000)'], timeoutMs: 10 }, 0),
       ),
     /failed/,
+  );
+});
+
+test('failed commands preserve complete multiline stdout and stderr diagnostics', async () => {
+  await assert.rejects(
+    () =>
+      runCommand(
+        command(
+          {
+            command: 'node',
+            args: [
+              '-e',
+              "process.stdout.write('worker stdout one\\nworker stdout two\\n'); process.stderr.write('worker stderr one\\nworker stderr two\\n'); process.exit(17)",
+            ],
+          },
+          0,
+        ),
+      ),
+    (error) => {
+      assert.match(error.message, /exit 17/);
+      assert.match(error.message, /stdout:\nworker stdout one\nworker stdout two\n/);
+      assert.match(error.message, /stderr:\nworker stderr one\nworker stderr two\n/);
+      return true;
+    },
+  );
+});
+
+test('failed retries retain diagnostics from every unsuccessful attempt', async () => {
+  await assert.rejects(
+    () =>
+      runCommand(
+        command(
+          {
+            command: 'node',
+            args: [
+              '-e',
+              "process.stdout.write('retry stdout\\n'); process.stderr.write('retry stderr\\n'); process.exit(17)",
+            ],
+            retries: 1,
+          },
+          0,
+        ),
+      ),
+    (error) => {
+      assert.match(error.message, /failed after 2 attempt\(s\)/);
+      assert.match(error.message, /attempt 1: exit 17/);
+      assert.match(error.message, /attempt 2: exit 17/);
+      assert.equal((error.message.match(/retry stdout/g) ?? []).length, 2);
+      assert.equal((error.message.match(/retry stderr/g) ?? []).length, 2);
+      return true;
+    },
   );
 });
 
@@ -663,7 +721,79 @@ test('new branch preparation failure is persisted and does not leave a claimed r
   };
   await dispatch(h.cfg, h.deps);
   assert.equal(h.state().status, 'blocked');
-  assert.equal(h.state().lastError, 'fetch failed');
+  assert.match(h.state().lastError, /The loop stopped during blocked/);
+  assert.equal(h.state().lastErrorVerbose, 'fetch failed');
+});
+
+function assertPersistedDiagnostic(state, phase, diagnostic, context) {
+  assert.ok((state.lastError.match(/[.!?]+/g) ?? []).length <= 4, state.lastError);
+  assert.match(state.lastError, new RegExp(`during ${phase}`));
+  for (const value of context) assert.match(state.lastError, value);
+  assert.equal(state.lastErrorVerbose, diagnostic);
+}
+
+test('empty diagnostic fallback persists concise blocked context separately from verbose output', async () => {
+  const h = harness([{ number: 1, title: 'a' }]);
+  h.deps.prepareWorkerBranch = () => {
+    throw new Error('');
+  };
+  await dispatch(h.cfg, h.deps);
+  assertPersistedDiagnostic(
+    h.state(),
+    'blocked',
+    'No diagnostic output was captured during blocked.',
+    [/issue #1/],
+  );
+  assert.match(h.state().lastError, /No diagnostic output was available/);
+});
+
+test('QA feedback persists concise context and the complete diagnostic', async () => {
+  const diagnostic =
+    '[QA/SDET Review] round=1 verdict=changes_requested commit=abc1\n[Q1] fail - café output';
+  const h = harness([{ number: 1, title: 'a' }], {
+    qaVerdicts: ['changes_requested', 'passed'],
+    qaBodies: [diagnostic],
+  });
+  await dispatch(h.cfg, h.deps);
+  const persisted = h.saves.find((state) => state.status === 'qa_changes_requested');
+  assertPersistedDiagnostic(persisted, 'qa changes requested', diagnostic, [/issue #1/, /PR #14/]);
+});
+
+test('Staff feedback persists concise context and the complete diagnostic', async () => {
+  const diagnostic =
+    '[Staff Review] round=1 verdict=changes_requested commit=abc1\n[S1] high - reproducible output';
+  const h = harness([{ number: 1, title: 'a' }], {
+    staffVerdicts: ['changes_requested', 'approved'],
+    staffBodies: [diagnostic],
+  });
+  await dispatch(h.cfg, h.deps);
+  const persisted = h.saves.find((state) => state.status === 'staff_changes_requested');
+  assertPersistedDiagnostic(persisted, 'staff changes requested', diagnostic, [
+    /issue #1/,
+    /PR #14/,
+  ]);
+});
+
+test('recovery failure persists concise issue and PR context with complete diagnostics', async () => {
+  const h = harness([{ number: 1, title: 'a' }], {
+    initialState: prepareRecovery(
+      { completedIssues: [1], branch: 'codex/issue-1' },
+      1,
+      14,
+      Date.now(),
+      100,
+    ),
+  });
+  h.deps.checkoutWorkerBranch = () => {
+    throw new Error('recovery checkout failed\nexit 2');
+  };
+  await dispatch(h.cfg, h.deps);
+  assertPersistedDiagnostic(
+    h.state(),
+    'worker recovery pending',
+    'recovery checkout failed\nexit 2',
+    [/issue #1/, /PR #14/],
+  );
 });
 
 test('blocked issue with PR context enters recovery instead of a fresh claim', async () => {
@@ -732,6 +862,11 @@ test('failed PR CI returns the issue to a recovered Worker without local npm gat
     h.runs.some((run) => run.command === 'npm'),
     false,
   );
+  const ciFailure = h.saves.find((state) => state.status === 'ci_failed');
+  assertPersistedDiagnostic(ciFailure, 'ci failed', '[CI] pr-checks: FAILURE', [
+    /issue #1/,
+    /PR #14/,
+  ]);
 });
 
 test('successful role process without a published review blocks the dispatcher', async () => {
@@ -764,12 +899,20 @@ test('stale locks recover safely and reclaim markers are atomic', () => {
   rmSync(lock, { recursive: true, force: true });
 });
 
-test('status remains observable while an active task is stored', () => {
+test('status remains concise by default and returns exact verbose diagnostics only on request', () => {
   const h = harness();
   mkdirSync(join(h.root, '.llmchat'), { recursive: true });
   writeFileSync(
     join(h.root, '.llmchat', 'state.json'),
-    JSON.stringify({ issue: 9, status: 'worker_running' }),
+    JSON.stringify({
+      issue: 9,
+      pr: 42,
+      status: 'worker_running',
+      lastError: 'short summary',
+      lastErrorVerbose: 'line one\nUnicode: café\nline three',
+      branch: 'codex/issue-9',
+      workerRecoveryCount: 3,
+    }),
   );
   const status = spawnSync(
     process.execPath,
@@ -780,7 +923,183 @@ test('status remains observable while an active task is stored', () => {
     },
   );
   assert.equal(status.status, 0);
-  assert.match(status.stdout, /worker_running/);
+  assert.deepEqual(JSON.parse(status.stdout), {
+    issue: 9,
+    pr: 42,
+    status: 'worker_running',
+    lastError: 'short summary',
+  });
+  const verbose = spawnSync(
+    process.execPath,
+    [join(process.cwd(), 'dist', 'dispatcher.js'), '--status', '--verbose'],
+    { cwd: h.root, encoding: 'utf8' },
+  );
+  assert.equal(verbose.status, 0);
+  assert.deepEqual(JSON.parse(verbose.stdout), {
+    issue: 9,
+    pr: 42,
+    status: 'worker_running',
+    lastError: 'short summary',
+    lastErrorVerbose: 'line one\nUnicode: café\nline three',
+    branch: 'codex/issue-9',
+    workerRecoveryCount: 3,
+  });
+});
+
+test('status rejects unsupported flag combinations', () => {
+  const h = harness();
+  for (const args of [
+    ['--status', '--list'],
+    ['--status', '--verbose', '--list'],
+    ['--status', '--unknown'],
+  ]) {
+    const result = spawnSync(
+      process.execPath,
+      [join(process.cwd(), 'dist', 'dispatcher.js'), ...args],
+      { cwd: h.root, encoding: 'utf8' },
+    );
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /--status accepts only the optional --verbose flag/);
+    assert.equal(result.stdout, '');
+  }
+});
+
+test('diagnostic redaction preserves safe multiline output and hides common credentials', () => {
+  const output = redactDiagnostic(
+    'exit 1\nGITHUB_TOKEN=secret-value\n{"password":"p@ss"}\nhttps://example.test/log',
+  );
+  assert.match(output, /exit 1/);
+  assert.match(output, /https:\/\/example.test\/log/);
+  assert.doesNotMatch(output, /secret-value|p@ss/);
+  assert.match(output, /\[REDACTED\]/);
+});
+
+test('diagnostic redaction exactly preserves hyphenated credential-key assignments', () => {
+  const diagnostic = [
+    'X-Secret-Value: secret-123',
+    'X-Credentials-Blob=credentials-123',
+    'X-Password-Hint: password-123',
+  ].join('\n');
+  const expected = [
+    'X-Secret-Value: [REDACTED]',
+    'X-Credentials-Blob=[REDACTED]',
+    'X-Password-Hint: [REDACTED]',
+  ].join('\n');
+  const output = redactDiagnostic(diagnostic);
+
+  assert.equal(output, expected);
+  assert.equal(redactDiagnostic(output), expected);
+});
+
+test('diagnostic redaction exactly preserves bare and prefixed header diagnostics', () => {
+  const diagnostic = [
+    'Authorization: Basic dXNlcjpwYXNzd29yZA==',
+    'Proxy-Authorization: Bearer proxy-secret',
+    'Cookie: session=one; csrf=two',
+    'Set-Cookie: session=three; HttpOnly',
+    '> Authorization: Basic dXNlcjpwYXNzd29yZA==',
+    'curl: Proxy-Authorization: Basic cHJveHk6c2VjcmV0',
+    'request headers: Cookie: session=one; csrf=two',
+    'trace: Set-Cookie: session=three; HttpOnly',
+  ].join('\n');
+  const expected = [
+    'Authorization: [REDACTED]',
+    'Proxy-Authorization: [REDACTED]',
+    'Cookie: [REDACTED]',
+    'Set-Cookie: [REDACTED]',
+    '> Authorization: [REDACTED]',
+    'curl: Proxy-Authorization: [REDACTED]',
+    'request headers: Cookie: [REDACTED]',
+    'trace: Set-Cookie: [REDACTED]',
+  ].join('\n');
+  const output = redactDiagnostic(diagnostic);
+
+  assert.equal(output, expected);
+  assert.equal(redactDiagnostic(output), expected);
+});
+
+test('diagnostic redaction removes short Bearer credentials', () => {
+  const output = redactDiagnostic('Bearer abc\nBearer secret\nBearer a');
+  assert.equal(output, 'Bearer [REDACTED]\nBearer [REDACTED]\nBearer [REDACTED]');
+});
+
+test('diagnostic redaction removes URL userinfo and complete cookie header values', () => {
+  const output = redactDiagnostic(
+    'https://alice:supersecret@example.test/log\nCookie: session=one; csrf=two\nSet-Cookie: session=three; HttpOnly\nhttps://example.test/safe',
+  );
+  assert.match(output, /https:\/\/\[REDACTED\]@example\.test\/log/);
+  assert.match(output, /Cookie: \[REDACTED\]/);
+  assert.match(output, /Set-Cookie: \[REDACTED\]/);
+  assert.match(output, /https:\/\/example\.test\/safe/);
+  assert.doesNotMatch(output, /alice|supersecret|session=one|csrf=two|session=three/);
+});
+
+test('legacy lastError-only state remains readable in both status modes', () => {
+  const h = harness();
+  mkdirSync(join(h.root, '.llmchat'), { recursive: true });
+  writeFileSync(
+    join(h.root, '.llmchat', 'state.json'),
+    JSON.stringify({ issue: 9, status: 'blocked', lastError: 'legacy failure summary' }),
+  );
+  for (const args of [['--status'], ['--status', '--verbose']]) {
+    const result = spawnSync(
+      process.execPath,
+      [join(process.cwd(), 'dist', 'dispatcher.js'), ...args],
+      {
+        cwd: h.root,
+        encoding: 'utf8',
+      },
+    );
+    assert.equal(result.status, 0, result.stderr);
+    assert.deepEqual(JSON.parse(result.stdout), {
+      issue: 9,
+      status: 'blocked',
+      lastError: 'legacy failure summary',
+    });
+  }
+});
+
+test('successful state without errors remains unchanged in both status modes', () => {
+  const h = harness();
+  mkdirSync(join(h.root, '.llmchat'), { recursive: true });
+  writeFileSync(
+    join(h.root, '.llmchat', 'state.json'),
+    JSON.stringify({ issue: 9, status: 'claimed' }),
+  );
+  for (const args of [['--status'], ['--status', '--verbose']]) {
+    const result = spawnSync(
+      process.execPath,
+      [join(process.cwd(), 'dist', 'dispatcher.js'), ...args],
+      {
+        cwd: h.root,
+        encoding: 'utf8',
+      },
+    );
+    assert.equal(result.status, 0, result.stderr);
+    assert.deepEqual(JSON.parse(result.stdout), { issue: 9, status: 'claimed' });
+  }
+});
+
+test('verbose status preserves quotes and shell-like diagnostic text exactly', () => {
+  const h = harness();
+  const diagnostic = 'stdout: "quoted"\nstderr: $(whoami) & echo %PATH%\nexit=17';
+  mkdirSync(join(h.root, '.llmchat'), { recursive: true });
+  writeFileSync(
+    join(h.root, '.llmchat', 'state.json'),
+    JSON.stringify({
+      issue: 9,
+      status: 'blocked',
+      lastError: 'short summary',
+      lastErrorVerbose: diagnostic,
+    }),
+  );
+  const verbose = spawnSync(
+    process.execPath,
+    [join(process.cwd(), 'dist', 'dispatcher.js'), '--status', '--verbose'],
+    { cwd: h.root, encoding: 'utf8' },
+  );
+  assert.equal(verbose.status, 0, verbose.stderr);
+  assert.equal(JSON.parse(verbose.stdout).lastErrorVerbose, diagnostic);
 });
 
 test('prepareRecovery preserves PR and removes only the issue from completion', () => {

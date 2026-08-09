@@ -45,7 +45,10 @@ export type State = {
   reviewRound?: number;
   attempt?: number;
   stagingGreen?: boolean;
+  /** Brief failure explanation retained for legacy readers. */
   lastError?: string;
+  /** Full redacted diagnostic, shown only by --status --verbose. */
+  lastErrorVerbose?: string;
   lastCiFeedback?: string;
   lastQaFeedback?: string;
   lastStaffFeedback?: string;
@@ -435,7 +438,7 @@ export function runCommand(spec: Spec | undefined): Promise<string> {
   if (!spec) return Promise.resolve('');
   const executable = resolveExecutable(spec.command);
   const launch = childProcessInvocation(executable, spec.args);
-  const attempt = (n: number): Promise<string> =>
+  const attempt = (n: number, failedAttempts: string[] = []): Promise<string> =>
     new Promise((resolve, reject) => {
       console.error(
         `[sloop] ejecutando (${n + 1}/${spec.retries + 1}): ${spec.command} ${spec.args.join(' ')}`,
@@ -473,13 +476,24 @@ export function runCommand(spec: Spec | undefined): Promise<string> {
       child.on('close', (code) => {
         clearTimeout(timer);
         if (code === 0) resolve(out.trim());
-        else if (n < spec.retries) attempt(n + 1).then(resolve, reject);
-        else
-          reject(
-            new Error(
-              `${spec.command} failed after ${spec.retries + 1} attempt(s): exit ${code}${err.trim() ? `: ${err.trim()}` : ''}`,
-            ),
-          );
+        else {
+          const attemptDiagnostic = [
+            `attempt ${n + 1}: exit ${code}`,
+            out ? `stdout:\n${out}` : '',
+            err ? `stderr:\n${err}` : '',
+          ]
+            .filter(Boolean)
+            .join('\n');
+          const diagnostics = [...failedAttempts, attemptDiagnostic];
+          if (n < spec.retries) attempt(n + 1, diagnostics).then(resolve, reject);
+          else {
+            const diagnostic = [
+              `${spec.command} failed after ${spec.retries + 1} attempt(s)`,
+              ...diagnostics,
+            ].join('\n');
+            reject(new Error(diagnostic));
+          }
+        }
       });
     });
   return attempt(0);
@@ -525,12 +539,61 @@ function skillFor(status: Status | undefined): string {
 }
 
 function status(d: Deps, issue: number, next: Status, extra: Partial<State> = {}): void {
-  d.save({ ...d.load(), issue, status: next, updatedAt: d.now(), ...extra });
+  const current = d.load();
+  const diagnostic =
+    extra.lastError ??
+    (['ci_failed', 'qa_changes_requested', 'staff_changes_requested'].includes(next)
+      ? (extra.lastCiFeedback ?? extra.lastQaFeedback ?? extra.lastStaffFeedback)
+      : undefined);
+  const errors = diagnostic === undefined ? {} : normalizedError(next, diagnostic, current);
+  d.save({ ...current, issue, status: next, updatedAt: d.now(), ...extra, ...errors });
   console.error(`[sloop] issue #${issue}: ${next}`);
   d.comment(
     issue,
     `Sloop engineering v2: estado ${next}. Skill activa: ${skillFor(next)}. QA precede a Staff; no se hace merge automático.`,
   );
+}
+
+export function redactDiagnostic(value: string): string {
+  const credentialKey = String.raw`(?:[A-Za-z][A-Za-z0-9_-]*[-_])?(?:token|api[_-]?key|secret|password|cookie|credentials?)(?:[-_][A-Za-z0-9_-]*)?`;
+  const sensitiveKey = String.raw`(?:authorization|${credentialKey})`;
+  const assignedSecret = new RegExp(
+    String.raw`((?:["']${sensitiveKey}["']|${sensitiveKey})\s*[:=]\s*)(?!(?:\[REDACTED\])(?=$|[\s,;\]}]))(?:Bearer\s+)?(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^\s,;\]}]+)`,
+    'gi',
+  );
+  return value
+    .replace(/\b([a-z][a-z0-9+.-]*:\/\/)[^\s\/@]*@/gi, '$1[REDACTED]@')
+    .replace(assignedSecret, '$1[REDACTED]')
+    .replace(/\bBearer\s+[^\s,;]+/gi, 'Bearer [REDACTED]')
+    .replace(/\b((?:proxy-)?authorization\s*:\s*)[^\r\n]*/gi, '$1[REDACTED]')
+    .replace(/\b((?:set-)?cookie\s*:\s*)[^\r\n]*/gi, '$1[REDACTED]')
+    .replace(/\b(?:ghp|github_pat|sk|xox[baprs])[-_A-Za-z0-9]+\b/gi, '[REDACTED]');
+}
+
+function normalizedError(
+  phase: Status,
+  diagnostic: unknown,
+  state: State,
+): Pick<State, 'lastError' | 'lastErrorVerbose'> {
+  const verbose = redactDiagnostic(String(diagnostic ?? ''));
+  const firstLine = verbose
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .find(Boolean);
+  const context = [state.issue ? `issue #${state.issue}` : '', state.pr ? `PR #${state.pr}` : '']
+    .filter(Boolean)
+    .join(', ');
+  const detail = firstLine
+    ? ` Observed output begins: ${firstLine
+        .replace(/[.!?]+/g, ',')
+        .replace(/\s+/g, ' ')
+        .slice(0, 400)}.`
+    : ' No diagnostic output was available.';
+  return {
+    lastError: `The loop stopped during ${phase.replaceAll('_', ' ')}${context ? ` for ${context}` : ''}.${detail} See verbose diagnostics for the complete output.`,
+    lastErrorVerbose:
+      verbose || `No diagnostic output was captured during ${phase.replaceAll('_', ' ')}.`,
+  };
 }
 
 function claimNewIssue(d: Deps, issue: number): void {
@@ -870,6 +933,7 @@ async function runWorker(
     workerRecoveryCount: (d.load().workerRecoveryCount ?? 0) + 1,
     reviewRound: round,
     lastError: undefined,
+    lastErrorVerbose: undefined,
   });
   const spec = roleCommand(cfg.workerCommand, issue.number, cfg);
   if (!spec) throw new Error('workerCommand is required');
@@ -1165,6 +1229,7 @@ export function prepareRecovery(
     reviewRound: state.reviewRound ?? 1,
     completedIssues: (state.completedIssues ?? []).filter((number) => number !== issue),
     lastError: undefined,
+    lastErrorVerbose: undefined,
     drainStatus: 'running',
     updatedAt: now,
   };
@@ -1341,6 +1406,7 @@ function resolveReviewCap(args: string[], cfg: Config): void {
     reviewCap: cap,
     status: additionalRounds > 0 ? 'worker_recovery_pending' : 'ready_for_human_merge',
     lastError: undefined,
+    lastErrorVerbose: undefined,
     updatedAt: Date.now(),
   };
   writeState(next);
@@ -1524,9 +1590,23 @@ export async function dispatch(cfg: Config, d: Deps): Promise<void> {
 async function main() {
   const args = process.argv.slice(2);
   if (args.includes('--status')) {
-    console.log(JSON.stringify(readState(), null, 2));
+    const supportedStatusArgs =
+      (args.length === 1 && args[0] === '--status') ||
+      (args.length === 2 && args.includes('--verbose'));
+    if (!supportedStatusArgs) throw new Error('--status accepts only the optional --verbose flag');
+    const current = readState();
+    const displayed = args.includes('--verbose')
+      ? current
+      : {
+          issue: current.issue,
+          pr: current.pr,
+          status: current.status,
+          lastError: current.lastError,
+        };
+    console.log(JSON.stringify(displayed, null, 2));
     return;
   }
+  if (args.includes('--verbose')) throw new Error('--verbose is supported only with --status');
   const cfg: Config = existsSync(join(root, 'sloop.config.json'))
     ? JSON.parse(readFileSync(join(root, 'sloop.config.json'), 'utf8'))
     : {};
