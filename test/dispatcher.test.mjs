@@ -174,6 +174,12 @@ function harness(
   };
 }
 
+function assertPersistedErrorContract(state, diagnostic) {
+  assert.ok(state.lastError);
+  assert.ok(state.lastError.match(/[.!?]+/g).length <= 4);
+  assert.equal(state.lastErrorVerbose, redactDiagnostic(diagnostic));
+}
+
 test('commands use argv, exit codes, retries, timeout and no shell contract', async () => {
   assert.deepEqual(command(['node', '-e', 'process.exit(0)'], 42, true).args, [
     '-e',
@@ -406,6 +412,10 @@ test('QA changes return to Worker and QA is repeated before Staff', async () => 
     h.runs.map((run) => run.input?.match(/Use the ([^ ]+)/)?.[1]),
     ['worker', 'qa-sdet', 'worker', 'qa-sdet', 'staff-reviewer'],
   );
+  assertPersistedErrorContract(
+    h.saves.find((saved) => saved.status === 'qa_changes_requested'),
+    '[QA/SDET Review] round=1 verdict=changes_requested commit=abc1',
+  );
 });
 
 test('Staff changes return to Worker and force QA before Staff re-review', async () => {
@@ -418,6 +428,10 @@ test('Staff changes return to Worker and force QA before Staff re-review', async
   assert.deepEqual(
     h.runs.map((run) => run.input?.match(/Use the ([^ ]+)/)?.[1]),
     ['worker', 'qa-sdet', 'staff-reviewer', 'worker', 'qa-sdet', 'staff-reviewer'],
+  );
+  assertPersistedErrorContract(
+    h.saves.find((saved) => saved.status === 'staff_changes_requested'),
+    '[Staff Review] round=1 verdict=changes_requested commit=abc1',
   );
 });
 
@@ -489,7 +503,9 @@ test('recovery rejects a non-deterministic persisted branch', async () => {
   });
   await dispatch(h.cfg, h.deps);
   assert.equal(h.state().status, 'worker_recovery_pending');
+  const diagnostic = 'recovery requires persisted worker branch codex/issue-1; found main';
   assert.match(h.state().lastError, /recovery requires persisted worker branch codex\/issue-1/);
+  assertPersistedErrorContract(h.state(), diagnostic);
 });
 
 test('conflicting Worker PR is rejected before reviews', async () => {
@@ -526,6 +542,10 @@ test('failed PR CI returns the issue to a recovered Worker without local npm gat
   assert.equal(
     h.runs.some((run) => run.command === 'npm'),
     false,
+  );
+  assertPersistedErrorContract(
+    h.saves.find((saved) => saved.status === 'ci_failed'),
+    '[CI] pr-checks: FAILURE',
   );
 });
 
