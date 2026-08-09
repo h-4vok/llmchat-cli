@@ -984,6 +984,20 @@ test('diagnostic redaction removes complete Authorization header values', () => 
   assert.match(output, /https:\/\/example\.test\/log/);
 });
 
+test('diagnostic redaction removes complete prefixed header values', () => {
+  const output = redactDiagnostic(
+    '> Authorization: Basic dXNlcjpwYXNzd29yZA==\ncurl: Proxy-Authorization: Basic cHJveHk6c2VjcmV0\nrequest headers: Cookie: session=one; csrf=two\ntrace: Set-Cookie: session=three; HttpOnly',
+  );
+  assert.match(output, /> Authorization: \[REDACTED\]/);
+  assert.match(output, /curl: Proxy-Authorization: \[REDACTED\]/);
+  assert.match(output, /request headers: Cookie: \[REDACTED\]/);
+  assert.match(output, /trace: Set-Cookie: \[REDACTED\]/);
+  assert.doesNotMatch(
+    output,
+    /dXNlcjpwYXNzd29yZA==|cHJveHk6c2VjcmV0|session=one|csrf=two|session=three/,
+  );
+});
+
 test('diagnostic redaction removes short Bearer credentials', () => {
   const output = redactDiagnostic('Bearer abc\nBearer secret\nBearer a');
   assert.equal(output, 'Bearer [REDACTED]\nBearer [REDACTED]\nBearer [REDACTED]');

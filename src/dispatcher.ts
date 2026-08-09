@@ -561,8 +561,8 @@ export function redactDiagnostic(value: string): string {
     'gi',
   );
   return value
-    .replace(/(^|\r?\n)(\s*(?:proxy-)?authorization\s*:\s*)[^\r\n]*/gi, '$1$2[REDACTED]')
-    .replace(/(^|\r?\n)(\s*(?:set-)?cookie\s*:\s*)[^\r\n]*/gi, '$1$2[REDACTED]')
+    .replace(/\b((?:proxy-)?authorization\s*:\s*)[^\r\n]*/gi, '$1[REDACTED]')
+    .replace(/\b((?:set-)?cookie\s*:\s*)[^\r\n]*/gi, '$1[REDACTED]')
     .replace(/\b([a-z][a-z0-9+.-]*:\/\/)[^\s\/@]*@/gi, '$1[REDACTED]@')
     .replace(assignedSecret, '$1[REDACTED]')
     .replace(/\bBearer\s+[^\s,;]+/gi, 'Bearer [REDACTED]')
