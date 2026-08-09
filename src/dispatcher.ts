@@ -247,9 +247,21 @@ export function childProcessInvocation(
   commandProcessor = process.env.ComSpec,
 ): { command: string; args: string[] } {
   if (platform === 'win32' && /\.(cmd|bat)$/i.test(executable)) {
+    // cmd.exe must parse batch files, so never pass arbitrary argv entries to
+    // its command parser. The dispatcher only needs fixed CLI flags for batch
+    // shims; reject syntax that could change the command before spawning it.
+    const unsafe = /["%&|<>()^!\r\n]/;
+    if (unsafe.test(executable) || args.some((arg) => unsafe.test(arg)))
+      throw new Error('Windows batch command contains unsafe cmd.exe syntax');
     return {
       command: commandProcessor || 'cmd.exe',
-      args: ['/d', '/s', '/c', executable, ...args],
+      args: [
+        '/d',
+        '/s',
+        '/v:off',
+        '/c',
+        `"${executable}" ${args.map((arg) => `"${arg}"`).join(' ')}`,
+      ],
     };
   }
   return { command: executable, args };

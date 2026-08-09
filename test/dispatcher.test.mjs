@@ -29,8 +29,21 @@ test('Windows batch commands use cmd.exe without Node shell mode', () => {
     ),
     {
       command: 'C:\\Windows\\System32\\cmd.exe',
-      args: ['/d', '/s', '/c', 'C:\\tools\\codex.cmd', 'exec', '--full-auto'],
+      args: ['/d', '/s', '/v:off', '/c', '"C:\\tools\\codex.cmd" "exec" "--full-auto"'],
     },
+  );
+});
+
+test('Windows batch commands reject cmd.exe syntax in argv before launch', () => {
+  assert.throws(
+    () =>
+      childProcessInvocation(
+        'C:\\tools\\codex.cmd',
+        ['SAFE" & echo INJECTED & rem "'],
+        'win32',
+        'C:\\Windows\\System32\\cmd.exe',
+      ),
+    /unsafe cmd\.exe syntax/,
   );
 });
 
