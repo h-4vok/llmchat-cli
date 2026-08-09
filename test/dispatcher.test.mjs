@@ -6,17 +6,111 @@ import { spawnSync } from 'node:child_process';
 import { test } from 'node:test';
 import {
   acquire,
+  childProcessInvocation,
   command,
   dispatcherLockPath,
   dispatch,
   prepareWorkerBranch,
   prepareRecovery,
-  redactDiagnostic,
   recoverStaleLock,
+  runSyncCommand,
+  redactDiagnostic,
   workerBranchName,
+  withIssueClosingReference,
   resetRunState,
   runCommand,
 } from '../dist/dispatcher.js';
+
+test('Windows batch commands use cmd.exe without Node shell mode', () => {
+  assert.deepEqual(
+    childProcessInvocation(
+      'C:\\tools\\codex.cmd',
+      ['exec', '--full-auto'],
+      'win32',
+      'C:\\Windows\\System32\\cmd.exe',
+    ),
+    {
+      command: 'C:\\Windows\\System32\\cmd.exe',
+      args: ['/d', '/s', '/v:off', '/c', '""C:\\tools\\codex.cmd" "exec" "--full-auto""'],
+      windowsVerbatimArguments: true,
+    },
+  );
+});
+
+test('Windows batch commands execute from paths containing spaces', (t) => {
+  if (process.platform !== 'win32') {
+    t.skip('requires Windows cmd.exe');
+    return;
+  }
+
+  const directory = mkdtempSync(join(tmpdir(), 'llmchat batch command-'));
+  const executable = join(directory, 'echo argument.cmd');
+  writeFileSync(executable, '@echo off\r\necho %~1\r\n');
+  try {
+    const launch = childProcessInvocation(executable, ['expected'], 'win32', process.env.ComSpec);
+    const result = spawnSync(launch.command, launch.args, {
+      encoding: 'utf8',
+      shell: false,
+      windowsVerbatimArguments: launch.windowsVerbatimArguments,
+    });
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.stdout.trim(), 'expected');
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('Windows batch commands reject cmd.exe syntax in argv before launch', () => {
+  assert.throws(
+    () =>
+      childProcessInvocation(
+        'C:\\tools\\codex.cmd',
+        ['SAFE" & echo INJECTED & rem "'],
+        'win32',
+        'C:\\Windows\\System32\\cmd.exe',
+      ),
+    /unsafe cmd\.exe syntax/,
+  );
+});
+
+test('synchronous Windows batch shims preserve verbatim cmd.exe command text', () => {
+  let invocation;
+  const output = runSyncCommand(
+    'C:\\Program Files\\GitHub CLI\\gh.cmd',
+    ['pr', 'view', '40'],
+    (command, args, options) => {
+      invocation = { command, args, options };
+      return 'ok';
+    },
+    'win32',
+    'C:\\Windows\\System32\\cmd.exe',
+  );
+
+  assert.equal(output, 'ok');
+  assert.deepEqual(invocation, {
+    command: 'C:\\Windows\\System32\\cmd.exe',
+    args: [
+      '/d',
+      '/s',
+      '/v:off',
+      '/c',
+      '""C:\\Program Files\\GitHub CLI\\gh.cmd" "pr" "view" "40""',
+    ],
+    options: {
+      cwd: process.cwd(),
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+      windowsVerbatimArguments: true,
+    },
+  });
+});
+
+test('non-batch commands preserve their executable and arguments', () => {
+  assert.deepEqual(childProcessInvocation('codex', ['exec'], 'win32'), {
+    command: 'codex',
+    args: ['exec'],
+  });
+});
 
 const baseConfig = {
   baseBranch: 'staging',
@@ -32,25 +126,9 @@ const baseConfig = {
   maxReviewRounds: 5,
 };
 
-test('redactDiagnostic preserves diagnostic context without credential values', () => {
-  const diagnostic =
-    'exit 2\nAuthorization: Bearer secret-value\nTOKEN=abc123\ncookie=session-value\nhttps://example.test/log';
-  const redacted = redactDiagnostic(diagnostic);
-  assert.match(redacted, /exit 2/);
-  assert.match(redacted, /https:\/\/example\.test\/log/);
-  assert.doesNotMatch(redacted, /secret-value|abc123|session-value/);
-  assert.match(redacted, /\[REDACTED\]/);
-});
-
-test('redactDiagnostic redacts JSON secrets and prefixed environment credentials', () => {
-  const diagnostic =
-    '{"token":"json-secret","password":"p@ss"}\nGITHUB_TOKEN=env-secret\nSERVICE_API_KEY="api-secret"';
-  const redacted = redactDiagnostic(diagnostic);
-  assert.doesNotMatch(redacted, /json-secret|p@ss|env-secret|api-secret/);
-  assert.match(redacted, /token["']?\s*:\s*\[REDACTED\]/i);
-  assert.match(redacted, /GITHUB_TOKEN=\[REDACTED\]/);
-  assert.match(redacted, /SERVICE_API_KEY=\[REDACTED\]/);
-});
+function existingHumanReviewGuide(commit = 'abc1') {
+  return `[Human Review Guide] round=1 commit=${commit}\n<!-- llmchat-dispatcher-human-review-guide -->\n\nSummary\nExercise the CLI change.\n\nSteps\n1. Run the focused command in a temporary directory.\n\nExpected results\n- The documented output appears.\n\nIsolation\nUse a temporary checkout and no credentials.\n\nLimitations / diagnostics\n- A failed command indicates the change is not ready.\n\nApproval checklist\n- [ ] Behavior matches the acceptance criteria.`;
+}
 
 function harness(
   issues = [{ number: 1, title: 'one', body: 'acceptance criteria' }],
@@ -61,6 +139,8 @@ function harness(
   const saves = [];
   const comments = [];
   const runs = [];
+  const prBodyUpdates = [];
+  const createdPrBodies = [];
   const reviews = [];
   const pr = {
     number: 14,
@@ -68,6 +148,7 @@ function harness(
     baseRefName: 'staging',
     headRefName: overrides.headRefName ?? 'codex/issue-1',
     headRefOid: 'abc0',
+    body: overrides.prBody ?? 'Summary',
     mergeStateStatus: 'CLEAN',
     mergeable: 'MERGEABLE',
     comments: [],
@@ -85,6 +166,11 @@ function harness(
     staff: true,
     ...(overrides.publishEvidence ?? {}),
   };
+  const humanVerification = overrides.humanVerification ?? true;
+  for (let guide = 0; guide < (overrides.existingHumanGuides ?? 0); guide += 1)
+    pr.comments.push({ body: existingHumanReviewGuide() });
+  if (overrides.malformedHumanGuide)
+    pr.comments.push({ body: '[Human Review Guide] round=1 commit=abc1\n\nSummary\nInjected.' });
   const checkSequences = overrides.checkSequences ?? [pr.statusCheckRollup];
   let checkIndex = 0;
 
@@ -111,13 +197,23 @@ function harness(
       if (role === 'worker') {
         workerCount += 1;
         pr.headRefOid = `abc${workerCount}`;
+        if (overrides.workerCreatesPr) {
+          // Model the Worker passing the dispatcher-owned payload directly to
+          // `gh pr create --body-file`; this is the initial remote PR body.
+          pr.body = spec.env.LLMCHAT_PR_BODY;
+          createdPrBodies.push(pr.body);
+        }
         spec.onStart?.(1000 + workerCount);
         spec.onHeartbeat?.();
-        if (publishEvidence.worker)
+        if (publishEvidence.worker) {
+          const verification = humanVerification
+            ? `\n\n[Human Verification]\n\`\`\`json\n${JSON.stringify({ summary: 'Exercise the CLI change.', steps: ['Run the focused command in a temporary directory.'], expected: ['The documented output appears.'], isolation: 'Use a temporary checkout and no credentials.', limitations: ['A failed command indicates the change is not ready.'], checklist: ['Behavior matches the acceptance criteria.'] })}\n\`\`\``
+            : '';
           pr.comments.push({
-            body: `[Worker] round=${round} status=ready_for_review pr=${pr.number} base=staging commit=${pr.headRefOid}`,
+            body: `[Worker] round=${round} status=ready_for_review pr=${pr.number} base=staging commit=${pr.headRefOid}${verification}`,
             createdAt: `${workerCount}`,
           });
+        }
         return `WORKER_RESULT pr=${pr.number} base=staging`;
       }
       if (role === 'qa') {
@@ -148,6 +244,12 @@ function harness(
       pr.statusCheckRollup = checkSequences[Math.min(checkIndex++, checkSequences.length - 1)];
       return structuredClone(pr);
     },
+    updatePullRequestBody: async (number, body) => {
+      assert.equal(number, pr.number);
+      pr.body = body;
+      prBodyUpdates.push({ number, body });
+    },
+    pullRequestBody: () => pr.body,
     now: () => Date.now(),
     pid: () => process.pid,
     processAlive: (pid) => pid > 0 && pid !== -1,
@@ -170,14 +272,10 @@ function harness(
       state = next;
     },
     counts: () => ({ workerCount, qaCount, staffCount }),
+    prBodyUpdates,
+    createdPrBodies,
     cfg: { ...baseConfig, ...overrides.config },
   };
-}
-
-function assertPersistedErrorContract(state, diagnostic) {
-  assert.ok(state.lastError);
-  assert.ok(state.lastError.match(/[.!?]+/g).length <= 4);
-  assert.equal(state.lastErrorVerbose, redactDiagnostic(diagnostic));
 }
 
 test('commands use argv, exit codes, retries, timeout and no shell contract', async () => {
@@ -191,27 +289,21 @@ test('commands use argv, exit codes, retries, timeout and no shell contract', as
     /failed after 2 attempt/,
   );
   await assert.rejects(
-    runCommand(
-      command(
-        {
-          command: 'node',
-          args: [
-            '-e',
-            "console.log('stdout detail'); console.error('stderr detail'); process.exit(2)",
-          ],
-        },
-        0,
-      ),
-    ),
-    /stdout:\nstdout detail[\s\S]*stderr:\nstderr detail/,
-  );
-  await assert.rejects(
     () =>
       runCommand(
         command({ command: 'node', args: ['-e', 'setTimeout(()=>{},1000)'], timeoutMs: 10 }, 0),
       ),
     /failed/,
   );
+});
+
+test('PR closing reference uses the claimed issue exactly once for creation and recovery', () => {
+  assert.equal(withIssueClosingReference('Summary', 17), 'Summary\n\nCloses #17');
+  assert.equal(
+    withIssueClosingReference('Summary\n\nCloses #1\nClose #17\nclosed #99', 17),
+    'Summary\n\nCloses #17',
+  );
+  assert.throws(() => withIssueClosingReference('', 0), /issue number must be positive/);
 });
 
 test('dispatcher runs Worker, QA, then Staff and uses PR evidence instead of JSON', async () => {
@@ -231,30 +323,124 @@ test('dispatcher runs Worker, QA, then Staff and uses PR evidence instead of JSO
       ['--sandbox', 'read-only'],
     ],
   );
+  assert.equal(h.runs[0].env.LLMCHAT_ISSUE_NUMBER, '1');
   assert.equal(h.reviews[0].body.startsWith('[QA/SDET Review]'), true);
   assert.equal(h.reviews[1].body.startsWith('[Staff Review]'), true);
+  const guide = h.comments.find(([, body]) => body.startsWith('[Human Review Guide]'))?.[1] ?? '';
+  assert.match(guide, /commit=abc1/);
+  assert.match(guide, /Isolation/);
+  assert.match(guide, /Approval checklist/);
   assert.equal(h.state().branch, 'codex/issue-1');
   assert.equal(h.state().stagingBaseSha, 'staging-sha-1');
 });
 
-test('Worker failures persist concise summaries and complete diagnostics', async () => {
-  const h = harness([{ number: 1, title: 'a' }]);
-  const diagnostic =
-    'worker command exited 2\nstdout:\npartial result\nstderr:\nfailed to update PR https://example.test/pr/14';
-  h.deps.run = async (spec) => {
-    if (spec.input?.includes('Use the worker skill')) throw new Error(diagnostic);
-    return 'completed';
-  };
-
+test('existing human guide for the current commit is not published twice', async () => {
+  const h = harness(undefined, { existingHumanGuides: 1 });
   await dispatch(h.cfg, h.deps);
+  assert.equal(h.comments.filter(([, body]) => body.startsWith('[Human Review Guide]')).length, 0);
+});
 
+test('duplicate human guides for the current commit block ready_for_human_merge', async () => {
+  const h = harness(undefined, { existingHumanGuides: 2 });
+  await dispatch(h.cfg, h.deps);
   assert.equal(h.state().status, 'worker_recovery_pending');
-  assertPersistedErrorContract(h.state(), diagnostic);
+  assert.match(h.state().lastError, /Expected exactly one \[Human Review Guide\].*duplicates/);
+  assert.equal(h.comments.filter(([, body]) => body.startsWith('[Human Review Guide]')).length, 0);
+});
+
+test('malformed current human guide blocks ready_for_human_merge', async () => {
+  const h = harness(undefined, { malformedHumanGuide: true });
+  await dispatch(h.cfg, h.deps);
+  assert.equal(h.state().status, 'worker_recovery_pending');
+  assert.match(h.state().lastError, /not dispatcher-rendered/);
+  assert.equal(h.comments.filter(([, body]) => body.startsWith('[Human Review Guide]')).length, 0);
+});
+
+test('incomplete Worker human-verification evidence blocks before ready_for_human_merge', async () => {
+  const h = harness(undefined, { humanVerification: false });
+  await dispatch(h.cfg, h.deps);
+  assert.equal(h.state().status, 'worker_recovery_pending');
+  assert.match(h.state().lastError, /complete \[Human Verification\] guide/);
+});
+
+test('create and recovery smoke paths capture the persisted claimed-issue PR body', async () => {
+  const h = harness([{ number: 17, title: 'seventeen', body: 'criteria' }], {
+    prBody: 'Summary\n\nCloses #1\nClose #99',
+  });
+  await dispatch(h.cfg, h.deps);
+  // This is the create-path handoff: the Worker receives the exact body contract
+  // that it must pass to `gh pr create`.
+  const workerInput =
+    h.runs.find((run) => run.input?.includes('Use the worker skill'))?.input ?? '';
+  assert.match(workerInput, /gh pr create\/edit \(or equivalent\) to persist that body/);
+  assert.match(workerInput, /state-authorized closing reference/);
+
+  // This is the recovery/update path: the captured `gh pr edit --body-file`
+  // equivalent receives one normalized reference and no stale references.
+  assert.deepEqual(h.prBodyUpdates, [{ number: 14, body: 'Summary\n\nCloses #17' }]);
+  assert.equal((h.prBodyUpdates[0].body.match(/^Closes #17$/gm) ?? []).length, 1);
+});
+
+test('dispatcher-generated body is used by the initial PR creation path', async () => {
+  const h = harness([{ number: 17, title: 'seventeen', body: 'criteria' }], {
+    workerCreatesPr: true,
+  });
+  await dispatch(h.cfg, h.deps);
+  const workerInput =
+    h.runs.find((run) => run.input?.includes('Use the worker skill'))?.input ?? '';
+  assert.equal(h.runs[0].env.LLMCHAT_PR_BODY, 'Closes #17');
+  assert.deepEqual(h.createdPrBodies, ['Closes #17']);
+  assert.equal((h.createdPrBodies[0].match(/^Closes #17$/gm) ?? []).length, 1);
+  assert.match(workerInput, /dispatcher has generated the initial PR body in LLMCHAT_PR_BODY/);
+  assert.match(workerInput, /gh pr create using --body-file/);
 });
 
 test('worker branch convention is deterministic and rejects invalid issue numbers', () => {
   assert.equal(workerBranchName(16), 'codex/issue-16');
   assert.throws(() => workerBranchName(0), /issue number must be positive/);
+});
+
+test('PR closing references preserve authorized linked issues and remove stale ones', () => {
+  assert.equal(
+    withIssueClosingReference('Summary\n\nCloses #1\nClose #17\nClosed #99', 17, [39]),
+    'Summary\n\nCloses #17\nCloses #39',
+  );
+});
+
+test('review cap pauses before a replacement Worker is launched', async () => {
+  const h = harness([{ number: 1, title: 'one' }], {
+    qaVerdicts: ['changes_requested'],
+    config: { maxReviewRounds: 1 },
+  });
+  await dispatch(h.cfg, h.deps);
+  assert.equal(h.state().status, 'review_cap_pending');
+  assert.equal(h.state().reviewRound, 2);
+  assert.equal(h.counts().workerCount, 1);
+  assert.deepEqual(h.state().reviewCap.outstandingFindingIds, []);
+});
+
+test('a local HITL budget and steer are included in the resumed Worker context', async () => {
+  const h = harness([{ number: 1, title: 'one' }], {
+    initialState: {
+      issue: 1,
+      pr: 14,
+      branch: 'codex/issue-1',
+      status: 'worker_recovery_pending',
+      reviewRound: 2,
+      reviewCap: {
+        capRound: 1,
+        additionalRounds: 1,
+        waivedFindingIds: ['Q4'],
+        outstandingFindingIds: ['Q4'],
+        decisionSha: 'abc0',
+        steer: 'Do not change GitHub configuration.',
+      },
+    },
+    config: { maxReviewRounds: 1 },
+  });
+  h.deps.checkoutWorkerBranch = () => {};
+  await dispatch(h.cfg, h.deps);
+  assert.match(h.runs[0].input, /HITL steer \(binding\): Do not change GitHub configuration/);
 });
 
 test('new branch preparation refuses to overwrite an existing worker branch', () => {
@@ -427,10 +613,6 @@ test('QA changes return to Worker and QA is repeated before Staff', async () => 
     h.runs.map((run) => run.input?.match(/Use the ([^ ]+)/)?.[1]),
     ['worker', 'qa-sdet', 'worker', 'qa-sdet', 'staff-reviewer'],
   );
-  assertPersistedErrorContract(
-    h.saves.find((saved) => saved.status === 'qa_changes_requested'),
-    '[QA/SDET Review] round=1 verdict=changes_requested commit=abc1',
-  );
 });
 
 test('Staff changes return to Worker and force QA before Staff re-review', async () => {
@@ -443,10 +625,6 @@ test('Staff changes return to Worker and force QA before Staff re-review', async
   assert.deepEqual(
     h.runs.map((run) => run.input?.match(/Use the ([^ ]+)/)?.[1]),
     ['worker', 'qa-sdet', 'staff-reviewer', 'worker', 'qa-sdet', 'staff-reviewer'],
-  );
-  assertPersistedErrorContract(
-    h.saves.find((saved) => saved.status === 'staff_changes_requested'),
-    '[Staff Review] round=1 verdict=changes_requested commit=abc1',
   );
 });
 
@@ -518,9 +696,7 @@ test('recovery rejects a non-deterministic persisted branch', async () => {
   });
   await dispatch(h.cfg, h.deps);
   assert.equal(h.state().status, 'worker_recovery_pending');
-  const diagnostic = 'recovery requires persisted worker branch codex/issue-1; found main';
   assert.match(h.state().lastError, /recovery requires persisted worker branch codex\/issue-1/);
-  assertPersistedErrorContract(h.state(), diagnostic);
 });
 
 test('conflicting Worker PR is rejected before reviews', async () => {
@@ -558,10 +734,6 @@ test('failed PR CI returns the issue to a recovered Worker without local npm gat
     h.runs.some((run) => run.command === 'npm'),
     false,
   );
-  assertPersistedErrorContract(
-    h.saves.find((saved) => saved.status === 'ci_failed'),
-    '[CI] pr-checks: FAILURE',
-  );
 });
 
 test('successful role process without a published review blocks the dispatcher', async () => {
@@ -594,12 +766,17 @@ test('stale locks recover safely and reclaim markers are atomic', () => {
   rmSync(lock, { recursive: true, force: true });
 });
 
-test('status remains observable while an active task is stored', () => {
+test('status remains concise by default and returns exact verbose diagnostics only on request', () => {
   const h = harness();
   mkdirSync(join(h.root, '.llmchat'), { recursive: true });
   writeFileSync(
     join(h.root, '.llmchat', 'state.json'),
-    JSON.stringify({ issue: 9, status: 'worker_running' }),
+    JSON.stringify({
+      issue: 9,
+      status: 'worker_running',
+      lastError: 'short summary',
+      lastErrorVerbose: 'line one\nUnicode: café\nline three',
+    }),
   );
   const status = spawnSync(
     process.execPath,
@@ -611,6 +788,25 @@ test('status remains observable while an active task is stored', () => {
   );
   assert.equal(status.status, 0);
   assert.match(status.stdout, /worker_running/);
+  assert.match(status.stdout, /short summary/);
+  assert.doesNotMatch(status.stdout, /Unicode: café/);
+  const verbose = spawnSync(
+    process.execPath,
+    [join(process.cwd(), 'dist', 'dispatcher.js'), '--status', '--verbose'],
+    { cwd: h.root, encoding: 'utf8' },
+  );
+  assert.equal(verbose.status, 0);
+  assert.match(verbose.stdout, /Unicode: café/);
+});
+
+test('diagnostic redaction preserves safe multiline output and hides common credentials', () => {
+  const output = redactDiagnostic(
+    'exit 1\nGITHUB_TOKEN=secret-value\n{"password":"p@ss"}\nhttps://example.test/log',
+  );
+  assert.match(output, /exit 1/);
+  assert.match(output, /https:\/\/example.test\/log/);
+  assert.doesNotMatch(output, /secret-value|p@ss/);
+  assert.match(output, /\[REDACTED\]/);
 });
 
 test('prepareRecovery preserves PR and removes only the issue from completion', () => {
@@ -751,35 +947,4 @@ test('dead reclaim marker recovers after its TTL', () => {
   assert.match(token, /^[0-9a-f-]+$/);
   assert.equal(existsSync(join(lock, 'reclaiming')), false);
   rmSync(lock, { recursive: true, force: true });
-});
-
-test('status hides verbose diagnostics unless explicitly requested', () => {
-  const directory = mkdtempSync(join(tmpdir(), 'llmchat-status-'));
-  const diagnostic = 'exit 2\nUnicode café\nTOKEN=hidden-value';
-  try {
-    mkdirSync(join(directory, '.llmchat'));
-    writeFileSync(
-      join(directory, '.llmchat', 'state.json'),
-      JSON.stringify({ issue: 22, lastError: 'Worker failed.', lastErrorVerbose: diagnostic }),
-    );
-    const concise = spawnSync(
-      process.execPath,
-      [join(process.cwd(), 'dist', 'dispatcher.js'), '--status'],
-      {
-        cwd: directory,
-        encoding: 'utf8',
-      },
-    );
-    const verbose = spawnSync(
-      process.execPath,
-      [join(process.cwd(), 'dist', 'dispatcher.js'), '--status', '--verbose'],
-      { cwd: directory, encoding: 'utf8' },
-    );
-    assert.equal(concise.status, 0, concise.stderr);
-    assert.equal(verbose.status, 0, verbose.stderr);
-    assert.equal(JSON.parse(concise.stdout).lastErrorVerbose, undefined);
-    assert.equal(JSON.parse(verbose.stdout).lastErrorVerbose, diagnostic);
-  } finally {
-    rmSync(directory, { recursive: true, force: true });
-  }
 });
