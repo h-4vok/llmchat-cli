@@ -112,6 +112,7 @@ export type Review = {
   body?: string;
   commitId?: string;
   submittedAt?: string;
+  updatedAt?: string;
   state?: string;
 };
 
@@ -418,6 +419,7 @@ function pullRequest(pr: number): PullRequest {
       body: review.body,
       state: review.state,
       submittedAt: review.submittedAt ?? review.submitted_at,
+      updatedAt: review.updatedAt ?? review.updated_at,
       commitId: review.commit?.oid ?? review.commitId ?? review.commit_id,
     })),
     comments: conversation
@@ -911,6 +913,7 @@ function workerMetadata(output: string, knownPr?: number): { pr?: number; base?:
 }
 
 const publicationMarker = '<!-- llmchat-review-publish:v1';
+const workerPublicationMarker = '<!-- llmchat-worker-publish:v1';
 function ingestHumanFeedback(d: Deps, pr: PullRequest): void {
   const state = d.load();
   const feedback = { ...(state.humanFeedback ?? {}) } as Record<string, any>;
@@ -919,12 +922,25 @@ function ingestHumanFeedback(d: Deps, pr: PullRequest): void {
       .filter((id) => /^H\d+$/.test(id))
       .reduce((n, id) => Math.max(n, Number(id.slice(1))), 0) + 1;
   const seenRemoteIds = new Set<string>();
-  for (const comment of pr.comments ?? []) {
+  const conversation = [
+    ...(pr.comments ?? []),
+    ...(pr.reviews ?? []).map((review) => ({
+      id: review.id,
+      body: review.body,
+      source: 'review' as const,
+      inReplyToId: undefined,
+      createdAt: review.submittedAt,
+      updatedAt: review.updatedAt ?? review.submittedAt,
+    })),
+  ];
+  for (const comment of conversation) {
     if (
       !comment.id ||
       !comment.body ||
       comment.body.includes(publicationMarker) ||
-      comment.body.startsWith('[Worker]')
+      comment.body.startsWith('[Worker]') ||
+      comment.body.startsWith('[QA/SDET Review]') ||
+      comment.body.startsWith('[Staff Review]')
     )
       continue;
     seenRemoteIds.add(comment.id);
@@ -970,6 +986,65 @@ function ingestHumanFeedback(d: Deps, pr: PullRequest): void {
     }
   }
   d.save({ ...state, humanFeedback: feedback });
+}
+
+async function publishStructuredWorkerOutput(
+  d: Deps,
+  pr: number,
+  round: number,
+  envelope: Envelope,
+  output: WorkerOutput,
+): Promise<void> {
+  if (!d.prComment) throw new Error('dispatcher PR publication adapter is required');
+  const key = createHash('sha256')
+    .update(`${envelope.message_id}:worker:${round}:${envelope.context.commit}`)
+    .digest('hex')
+    .slice(0, 32);
+  const body = [
+    `[Worker] round=${round} status=${output.status} pr=${pr} base=staging commit=${envelope.context.commit}`,
+    `${workerPublicationMarker} key=${key} -->`,
+    output.evidence.map((item) => `- ${item}`).join('\n'),
+    '[Human Verification]',
+    '```json',
+    JSON.stringify(output.human_verification, null, 2),
+    '```',
+  ].join('\n\n');
+  const state = d.load();
+  const ledger = { ...(state.publicationLedger ?? {}) } as Record<string, any>;
+  const existing = ledger[key];
+  if (existing?.status === 'published' || existing?.status === 'resolved') return;
+  ledger[key] = {
+    ...(existing ?? {}),
+    key,
+    action: 'worker-evidence',
+    placement: 'general',
+    status: 'pending',
+    marker: `${workerPublicationMarker} key=${key} -->`,
+    run: envelope.context.run_id,
+    role: 'worker',
+    round,
+    commit: envelope.context.commit,
+    artifact: body,
+    context_cursor: envelope.context.feedback_cursor,
+    envelope_hash: envelopeHash(envelope),
+    artifact_hash: createHash('sha256').update(body).digest('hex'),
+    intended_action: 'general',
+  };
+  d.save({ ...d.load(), publicationLedger: ledger });
+  const current = d.pullRequest ? await d.pullRequest(pr) : undefined;
+  if (
+    current?.comments?.some((comment) =>
+      comment.body?.includes(`${workerPublicationMarker} key=${key}`),
+    )
+  ) {
+    ledger[key].status = 'published';
+    d.save({ ...d.load(), publicationLedger: ledger });
+    return;
+  }
+  const remote = await d.prComment(pr, body);
+  if (remote) ledger[key].remote_id = String(remote);
+  ledger[key].status = 'published';
+  d.save({ ...d.load(), publicationLedger: ledger });
 }
 
 function openFindingIds(state: State, role: 'qa' | 'staff'): string[] {
@@ -1393,7 +1468,9 @@ async function runWorker(
     const payload = structured.output as WorkerOutput;
     if (payload.status === 'blocked') throw new Error('Worker returned blocked structured output');
   }
-  const metadata = workerMetadata(output, pr);
+  const metadata = structured
+    ? { pr: structured.context.pr, base: 'staging' }
+    : workerMetadata(output, pr);
   if (!metadata.pr || metadata.base !== (cfg.baseBranch ?? 'staging'))
     throw new Error('Worker must report an existing PR based on staging');
   if (!d.pullRequest) throw new Error('GitHub PR evidence adapter is required');
@@ -1405,6 +1482,14 @@ async function runWorker(
   );
   if (normalizedBody !== currentBody.trim())
     await (d.updatePullRequestBody ?? updatePullRequestBody)(metadata.pr, normalizedBody);
+  if (structured)
+    await publishStructuredWorkerOutput(
+      d,
+      metadata.pr,
+      round,
+      structured,
+      structured.output as WorkerOutput,
+    );
   d.save({ ...d.load(), pr: metadata.pr, workerPid: undefined, workerHeartbeatAt: d.now() });
   const evidence = await waitForEvidence(d, cfg, metadata.pr, (candidate) => {
     const head = candidate.headRefOid;

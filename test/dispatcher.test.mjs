@@ -150,6 +150,7 @@ function harness(
   const prBodyUpdates = [];
   const createdPrBodies = [];
   const reviews = [];
+  reviews.push(...(overrides.initialReviews ?? []));
   const pr = {
     number: 14,
     state: 'OPEN',
@@ -206,7 +207,9 @@ function harness(
       const round = Number(spec.input?.match(/review round (\d+)/)?.[1] ?? 1);
       if (role === 'worker') {
         workerCount += 1;
-        pr.headRefOid = `abc${workerCount}`;
+        pr.headRefOid = overrides.structuredWorkerOutput
+          ? '0123456789abcdef0123456789abcdef01234567'
+          : `abc${workerCount}`;
         if (overrides.workerCreatesPr) {
           // Model the Worker passing the dispatcher-owned payload directly to
           // `gh pr create --body-file`; this is the initial remote PR body.
@@ -215,6 +218,10 @@ function harness(
         }
         spec.onStart?.(1000 + workerCount);
         spec.onHeartbeat?.();
+        if (overrides.structuredWorkerOutput) {
+          const runId = spec.input.match(/dispatcher recovery run ([0-9a-f-]+)/i)?.[1];
+          return overrides.structuredWorkerOutput({ spec, runId, commit: pr.headRefOid });
+        }
         if (publishEvidence.worker) {
           const verification = humanVerification
             ? `\n\n[Human Verification]\n\`\`\`json\n${JSON.stringify({ summary: 'Exercise the CLI change.', steps: ['Run the focused command in a temporary directory.'], expected: ['The documented output appears.'], isolation: 'Use a temporary checkout and no credentials.', limitations: ['A failed command indicates the change is not ready.'], checklist: ['Behavior matches the acceptance criteria.'] })}\n\`\`\``
@@ -264,6 +271,11 @@ function harness(
       prBodyUpdates.push({ number, body });
     },
     pullRequestBody: () => pr.body,
+    prComment: async (number, body) => {
+      assert.equal(number, pr.number);
+      pr.comments.push({ body, createdAt: `dispatcher-${pr.comments.length}` });
+      return `comment-${pr.comments.length}`;
+    },
     now: () => Date.now(),
     pid: () => process.pid,
     processAlive: (pid) => pid > 0 && pid !== -1,
@@ -470,6 +482,59 @@ test('dispatcher runs Worker, QA, then Staff and uses PR evidence instead of JSO
   assert.match(guide, /Approval checklist/);
   assert.equal(h.state().branch, 'codex/issue-1');
   assert.equal(h.state().stagingBaseSha, 'staging-sha-1');
+});
+
+test('review-level human feedback receives a stable H item and is available to Staff gating', async () => {
+  const h = harness([{ number: 1, title: 'a' }], {
+    initialReviews: [
+      { id: 'human-review-1', body: 'Please verify the migration path.', submittedAt: '1' },
+    ],
+  });
+  await dispatch(h.cfg, h.deps);
+  const item = h.state().humanFeedback?.H1;
+  assert.equal(item?.remote_id, 'human-review-1');
+  assert.equal(item?.source, 'review');
+  assert.equal(item?.status, 'open');
+});
+
+test('valid structured Worker output is dispatcher-published without role-authored evidence', async () => {
+  const h = harness([{ number: 1, title: 'a' }], {
+    structuredWorkerOutput: ({ runId, commit }) =>
+      `<<<llmchat.agent-output/v1>>>\n${JSON.stringify({
+        schema: 'llmchat.agent-output/v1',
+        message_id: 'worker-structured-1',
+        producer: { role: 'worker' },
+        context: {
+          run_id: runId,
+          issue: 1,
+          pr: 14,
+          round: 1,
+          commit,
+          feedback_cursor: 'cursor-1',
+        },
+        output: {
+          schema: 'llmchat.worker-output/v1',
+          status: 'ready_for_review',
+          resolutions: [],
+          evidence: ['Dispatcher consumed the structured Worker result.'],
+          human_verification: {
+            summary: 'Verify the dispatcher-owned Worker publication.',
+            steps: ['Run the deterministic tests in a temporary checkout.'],
+            expected: ['The structured Worker result is published once.'],
+            isolation: 'Use a disposable checkout and do not modify GitHub state.',
+            limitations: ['Live GitHub permissions are not exercised locally.'],
+            checklist: ['Confirm the publication marker and current commit.'],
+          },
+        },
+      })}\n<<<end llmchat.agent-output/v1>>>`,
+  });
+  await dispatch(h.cfg, h.deps);
+  const workerComments = h.deps
+    .pullRequest(14)
+    .comments.filter((comment) => comment.body?.startsWith('[Worker]'));
+  assert.equal(workerComments.length, 1);
+  assert.match(workerComments[0].body, /llmchat-worker-publish:v1/);
+  assert.equal(h.state().status, 'ready_for_human_merge');
 });
 
 test('existing human guide for the current commit is not published twice', async () => {
