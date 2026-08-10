@@ -409,20 +409,33 @@ async function publishPullRequestReview(pr: number, body: string): Promise<void>
       '--slurp',
     ]);
     const files = filePages.flat();
-    const changed = new Map<string, Set<number>>();
+    const changed: Map<string, Map<'LEFT' | 'RIGHT', Set<number>>> = new Map();
     for (const file of files) {
-      const lines = new Set<number>();
-      let current = 0;
+      const left = new Set<number>();
+      const right = new Set<number>();
+      let oldLine = 0;
+      let newLine = 0;
       for (const part of (file.patch ?? '').split(/\r?\n/)) {
-        const header = part.match(/^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@/);
+        const header = part.match(/^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/);
         if (header) {
-          current = Number(header[1]);
+          oldLine = Number(header[1]);
+          newLine = Number(header[3]);
           continue;
         }
-        if (part.startsWith('+') && !part.startsWith('+++')) lines.add(current++);
-        else if (!part.startsWith('-')) current++;
+        if (part.startsWith('+') && !part.startsWith('+++')) right.add(newLine++);
+        else if (part.startsWith('-') && !part.startsWith('---')) left.add(oldLine++);
+        else if (part.startsWith(' ')) {
+          oldLine++;
+          newLine++;
+        }
       }
-      changed.set(file.filename, lines);
+      changed.set(
+        file.filename,
+        new Map([
+          ['LEFT', left],
+          ['RIGHT', right],
+        ]),
+      );
     }
     const published = new Set<string>();
     const generalBody = body

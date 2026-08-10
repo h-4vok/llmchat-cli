@@ -24,7 +24,15 @@ import {
 import { inlinePayload, placement, publishFindings } from '../dist/review-publication.js';
 
 test('review publication selects verified changed lines and exact REST payloads', async () => {
-  const changed = new Map([['src/app.ts', new Set([4, 5])]]);
+  const changed = new Map([
+    [
+      'src/app.ts',
+      new Map([
+        ['LEFT', new Set()],
+        ['RIGHT', new Set([4, 5])],
+      ]),
+    ],
+  ]);
   assert.equal(placement({ body: 'fix', file: 'src/app.ts', line: 4 }, changed), 'inline');
   assert.equal(placement({ body: 'summary' }, changed), 'general');
   assert.deepEqual(
@@ -39,13 +47,45 @@ test('review publication selects verified changed lines and exact REST payloads'
   );
 });
 
+test('review publication verifies side-specific lines and every range line', () => {
+  const changed = new Map([
+    [
+      'src/app.ts',
+      new Map([
+        ['LEFT', new Set([8, 9])],
+        ['RIGHT', new Set([4, 6])],
+      ]),
+    ],
+  ]);
+  assert.equal(
+    placement({ body: 'deleted', file: 'src/app.ts', line: 8, side: 'LEFT' }, changed),
+    'inline',
+  );
+  assert.equal(
+    placement({ body: 'wrong side', file: 'src/app.ts', line: 8, side: 'RIGHT' }, changed),
+    'general',
+  );
+  assert.equal(
+    placement({ body: 'mixed', file: 'src/app.ts', line: 4, endLine: 6, side: 'RIGHT' }, changed),
+    'general',
+  );
+});
+
 test('review publication falls back completely and preserves idempotent caller boundary', async () => {
   const inline = [];
   const general = [];
   await publishFindings(
     [{ body: 'bad', file: 'src/app.ts', line: 4 }, { body: 'summary' }],
     'abc',
-    new Map([['src/app.ts', new Set([4])]]),
+    new Map([
+      [
+        'src/app.ts',
+        new Map([
+          ['LEFT', new Set()],
+          ['RIGHT', new Set([4])],
+        ]),
+      ],
+    ]),
     async (payload) => {
       inline.push(payload);
       throw new Error('stale location');
@@ -57,7 +97,15 @@ test('review publication falls back completely and preserves idempotent caller b
   await publishFindings(
     [{ body: 'bad', file: 'src/app.ts', line: 4 }],
     'abc',
-    new Map([['src/app.ts', new Set([4])]]),
+    new Map([
+      [
+        'src/app.ts',
+        new Map([
+          ['LEFT', new Set()],
+          ['RIGHT', new Set([4])],
+        ]),
+      ],
+    ]),
     async (payload) => inline.push(payload),
     async (body) => general.push(body),
     new Set(['abc\x00src/app.ts\x004\x00\x00bad']),
