@@ -73,6 +73,112 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
 const nonEmpty = (value: unknown): value is string =>
   typeof value === 'string' && value.trim().length > 0;
 
+function validatePlacement(value: unknown): asserts value is Placement {
+  if (!isRecord(value) || !['general', 'inline'].includes(String(value.kind)))
+    throw new Error('invalid artifact placement');
+  if (value.kind === 'general') {
+    if (Object.keys(value).some((key) => key !== 'kind'))
+      throw new Error('invalid general placement');
+    return;
+  }
+  if (
+    !nonEmpty(value.path) ||
+    value.path.startsWith('/') ||
+    value.path.includes('\\') ||
+    value.path.split('/').includes('..')
+  )
+    throw new Error('invalid inline path');
+  if (
+    !/^[0-9a-f]{40}$/.test(String(value.commit)) ||
+    !['LEFT', 'RIGHT'].includes(String(value.side))
+  )
+    throw new Error('invalid inline placement');
+  if (!Number.isInteger(value.line) || Number(value.line) < 1)
+    throw new Error('invalid inline line');
+  if (
+    value.start_line !== undefined &&
+    (!Number.isInteger(value.start_line) ||
+      Number(value.start_line) < 1 ||
+      Number(value.start_line) > Number(value.line))
+  )
+    throw new Error('invalid inline range');
+}
+
+function validateReviewerOutput(output: Record<string, unknown>, role: Role): void {
+  if (
+    !['accepted', 'changes_requested', 'blocked'].includes(String(output.result)) ||
+    !nonEmpty(output.summary) ||
+    !Array.isArray(output.evidence) ||
+    !output.evidence.every(nonEmpty) ||
+    !Array.isArray(output.artifacts) ||
+    !isRecord(output.dispositions)
+  )
+    throw new Error('invalid reviewer output');
+  const ids = new Set<string>();
+  let actionable = 0;
+  for (const artifact of output.artifacts) {
+    if (
+      !isRecord(artifact) ||
+      !['review.finding/v1', 'review.note/v1', 'review.summary/v1', 'review.evidence/v1'].includes(
+        String(artifact.schema),
+      ) ||
+      !nonEmpty(artifact.body)
+    )
+      throw new Error('invalid review artifact');
+    const id = artifact.id;
+    if (artifact.schema === 'review.finding/v1') {
+      const prefix = role === 'qa' ? 'Q' : 'S';
+      if (typeof id !== 'string' || !new RegExp(`^${prefix}\\d+$`).test(id) || ids.has(id))
+        throw new Error('invalid or duplicate finding id');
+      actionable++;
+    } else if (id !== undefined && (typeof id !== 'string' || ids.has(id)))
+      throw new Error('invalid or duplicate artifact id');
+    if (typeof id === 'string') ids.add(id);
+    if (artifact.placement !== undefined) validatePlacement(artifact.placement);
+  }
+  for (const [id, disposition] of Object.entries(output.dispositions)) {
+    if (!/^[QS]\d+$/.test(id) || !['continue', 'resolve'].includes(String(disposition)))
+      throw new Error('invalid reviewer disposition');
+    if (role === 'qa' ? !id.startsWith('Q') : !id.startsWith('S'))
+      throw new Error('reviewer disposition ownership mismatch');
+  }
+  if (output.result === 'accepted' && actionable > 0)
+    throw new Error('accepted reviewer output has actionable findings');
+  if (output.result === 'changes_requested' && actionable === 0)
+    throw new Error('changes_requested requires a finding');
+  if (output.result === 'blocked' && actionable > 0)
+    throw new Error('blocked reviewer output cannot route findings');
+}
+
+function validateWorkerOutput(output: Record<string, unknown>): void {
+  if (
+    !['ready_for_review', 'blocked'].includes(String(output.status)) ||
+    !Array.isArray(output.resolutions) ||
+    !Array.isArray(output.evidence) ||
+    !output.evidence.every(nonEmpty) ||
+    !isRecord(output.human_verification)
+  )
+    throw new Error('invalid worker output');
+  const guide = output.human_verification;
+  for (const key of ['summary', 'isolation'])
+    if (!nonEmpty(guide[key])) throw new Error('invalid human verification guide');
+  for (const key of ['steps', 'expected', 'limitations', 'checklist'])
+    if (!Array.isArray(guide[key]) || !guide[key].every(nonEmpty))
+      throw new Error('invalid human verification guide');
+  const ids = new Set<string>();
+  for (const resolution of output.resolutions) {
+    if (
+      !isRecord(resolution) ||
+      !/^[QS]\d+$/.test(String(resolution.finding_id)) ||
+      ids.has(String(resolution.finding_id)) ||
+      !['fixed', 'answered', 'not_fixed'].includes(String(resolution.status)) ||
+      !nonEmpty(resolution.response)
+    )
+      throw new Error('invalid worker resolution');
+    ids.add(String(resolution.finding_id));
+  }
+}
+
 export function validateEnvelope(
   value: unknown,
   expected?: Partial<Context> & { role?: Role },
@@ -103,22 +209,8 @@ export function validateEnvelope(
   const output = value.output;
   if (!isRecord(output) || output.schema !== (role === 'worker' ? WORKER_SCHEMA : REVIEWER_SCHEMA))
     throw new Error('invalid payload schema');
-  if (role === 'worker') {
-    if (
-      !['ready_for_review', 'blocked'].includes(String(output.status)) ||
-      !Array.isArray(output.resolutions) ||
-      !Array.isArray(output.evidence) ||
-      !isRecord(output.human_verification)
-    )
-      throw new Error('invalid worker output');
-  } else if (
-    !['accepted', 'changes_requested', 'blocked'].includes(String(output.result)) ||
-    !nonEmpty(output.summary) ||
-    !Array.isArray(output.evidence) ||
-    !Array.isArray(output.artifacts) ||
-    !isRecord(output.dispositions)
-  )
-    throw new Error('invalid reviewer output');
+  if (role === 'worker') validateWorkerOutput(output);
+  else validateReviewerOutput(output, role);
   return value as unknown as Envelope;
 }
 

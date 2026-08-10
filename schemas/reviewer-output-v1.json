@@ -8,8 +8,54 @@
     "result": { "enum": ["accepted", "changes_requested", "blocked"] },
     "summary": { "type": "string", "minLength": 1 },
     "evidence": { "type": "array", "items": { "type": "string" } },
-    "artifacts": { "type": "array" },
-    "dispositions": { "type": "object" }
+    "artifacts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["schema", "body"],
+        "properties": {
+          "schema": {
+            "enum": [
+              "review.finding/v1",
+              "review.note/v1",
+              "review.summary/v1",
+              "review.evidence/v1"
+            ]
+          },
+          "id": { "type": "string", "pattern": "^[QS][0-9]+$" },
+          "body": { "type": "string", "minLength": 1 },
+          "severity": { "enum": ["low", "medium", "high", "critical"] },
+          "placement": {
+            "oneOf": [
+              {
+                "type": "object",
+                "required": ["kind"],
+                "properties": { "kind": { "const": "general" } },
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "required": ["kind", "path", "commit", "side", "line"],
+                "properties": {
+                  "kind": { "const": "inline" },
+                  "path": { "type": "string", "minLength": 1 },
+                  "commit": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+                  "side": { "enum": ["LEFT", "RIGHT"] },
+                  "line": { "type": "integer", "minimum": 1 },
+                  "start_line": { "type": "integer", "minimum": 1 }
+                },
+                "additionalProperties": false
+              }
+            ]
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "dispositions": {
+      "type": "object",
+      "additionalProperties": { "enum": ["continue", "resolve"] }
+    }
   },
   "additionalProperties": false
 }

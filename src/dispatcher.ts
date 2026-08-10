@@ -24,6 +24,7 @@ import {
   savePublicationState,
   recordEnvelope,
 } from './publication-ledger.js';
+import { buildDiffIndex, DiffLine, publishArtifact } from './review-publication.js';
 
 export type Status =
   | 'queued'
@@ -159,12 +160,13 @@ type Deps = {
   checkoutWorkerBranch?: (branch: string) => void;
   updatePullRequestBody?: (pr: number, body: string) => void | Promise<void>;
   pullRequestBody?: (pr: number) => string | Promise<string>;
-  prComment?: (pr: number, body: string) => void | Promise<void>;
+  prComment?: (pr: number, body: string) => void | string | Promise<void | string>;
   prInlineComment?: (
     pr: number,
     body: string,
     payload: Record<string, unknown>,
-  ) => void | Promise<void>;
+  ) => void | string | Promise<void | string>;
+  reviewDiff?: (pr: number, commit: string) => DiffLine[];
 };
 type Spec = {
   command: string;
@@ -396,8 +398,62 @@ function updatePullRequestBody(pr: number, body: string): void {
   }
 }
 
-function commentPullRequest(pr: number, body: string): void {
-  gh(['pr', 'comment', String(pr), '--body', body]);
+function commentPullRequest(pr: number, body: string): string {
+  return gh(['pr', 'comment', String(pr), '--body', body]);
+}
+
+function inlineCommentPullRequest(
+  pr: number,
+  body: string,
+  payload: Record<string, unknown>,
+): string {
+  const repo = ghJson<{ nameWithOwner: string }>([
+    'repo',
+    'view',
+    '--json',
+    'nameWithOwner',
+  ]).nameWithOwner;
+  const args = [
+    'api',
+    `repos/${repo}/pulls/${pr}/comments`,
+    '--method',
+    'POST',
+    '-f',
+    `body=${body}`,
+  ];
+  for (const [key, value] of Object.entries(payload)) args.push('-f', `${key}=${String(value)}`);
+  const result = ghJson<{ id?: number; html_url?: string }>(args);
+  return result.html_url ?? (result.id ? String(result.id) : '');
+}
+
+function localReviewDiff(commit: string): DiffLine[] {
+  let diff = '';
+  try {
+    diff = execFileSync('git', ['diff', '--unified=0', `origin/staging...${commit}`], {
+      cwd: root,
+      encoding: 'utf8',
+    });
+  } catch {
+    return [];
+  }
+  const lines: DiffLine[] = [];
+  let path = '';
+  for (const line of diff.split(/\r?\n/)) {
+    const file = line.match(/^\+\+\+ b\/(.+)$/);
+    if (file) {
+      path = file[1];
+      continue;
+    }
+    const hunk = line.match(/^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/);
+    if (!hunk || !path) continue;
+    const oldStart = Number(hunk[1]);
+    const oldCount = Number(hunk[2] ?? 1);
+    const newStart = Number(hunk[3]);
+    const newCount = Number(hunk[4] ?? 1);
+    for (let i = 0; i < newCount; i++) lines.push({ path, side: 'RIGHT', line: newStart + i });
+    for (let i = 0; i < oldCount; i++) lines.push({ path, side: 'LEFT', line: oldStart + i });
+  }
+  return lines;
 }
 
 function commentIssueOnce(issue: number, body: string): void {
@@ -1158,6 +1214,8 @@ async function runReview(
     status(d, issue.number, pending, { pr: prNumber, headSha: evidence.headRefOid });
   else status(d, issue.number, pending, { pr: prNumber, headSha: evidence.headRefOid });
   const configured = role === 'qa' ? cfg.qaCommand : cfg.staffReviewCommand;
+  const commit = evidence.headRefOid;
+  if (!commit) throw new Error('review requires a current PR head SHA');
   if (!configured) throw new Error(`${role} command is required`);
   const spec = roleCommand(configured, issue.number, cfg);
   if (!spec) throw new Error(`${role} command is required`);
@@ -1186,12 +1244,13 @@ async function runReview(
     issue: issue.number,
     pr: prNumber,
     round,
+    commit,
   });
   if (structured) {
     retainEnvelope(d, structured);
     const payload = structured.output as ReviewerOutput;
     if (payload.result === 'blocked') throw new Error(`${role} returned blocked structured output`);
-    const marker = role === 'qa' ? '[QA/SDET Review]' : '[Staff Review]';
+    const reviewMarker = role === 'qa' ? '[QA/SDET Review]' : '[Staff Review]';
     const verdict =
       role === 'qa'
         ? payload.result === 'accepted'
@@ -1200,14 +1259,89 @@ async function runReview(
         : payload.result === 'accepted'
           ? 'approved'
           : 'changes_requested';
+    if (!d.prComment) throw new Error('dispatcher PR publication adapter is required');
+    const diffIndex = buildDiffIndex(d.reviewDiff?.(prNumber, commit) ?? localReviewDiff(commit));
+    const ledger = { ...(d.load().publicationLedger ?? {}) } as Record<string, any>;
+    const publish = async (
+      publication: ReturnType<typeof publishArtifact>,
+      action: string,
+      inline = false,
+    ) => {
+      const existing = ledger[publication.key];
+      if (
+        existing?.status === 'published' ||
+        existing?.status === 'fallback' ||
+        existing?.status === 'resolved'
+      )
+        return;
+      ledger[publication.key] = {
+        ...(existing ?? {}),
+        key: publication.key,
+        action,
+        placement: publication.kind,
+        status: 'pending',
+        marker: publication.body.split('\n')[0],
+        run: runId,
+        role,
+        round,
+        commit,
+        artifact: publication.body,
+        fallback_reason: publication.fallbackReason,
+      };
+      d.save({ ...d.load(), publicationLedger: ledger });
+      const current = d.pullRequest ? await d.pullRequest(prNumber) : undefined;
+      if (
+        current?.comments?.some((comment) =>
+          comment.body?.includes(publication.body.split('\n')[0]),
+        )
+      ) {
+        ledger[publication.key].status = publication.fallbackReason ? 'fallback' : 'published';
+        d.save({ ...d.load(), publicationLedger: ledger });
+        return;
+      }
+      try {
+        const remote =
+          inline && publication.kind === 'inline' && publication.payload && d.prInlineComment
+            ? await d.prInlineComment(prNumber, publication.body, publication.payload)
+            : await d.prComment!(prNumber, publication.body);
+        if (remote) ledger[publication.key].remote_id = String(remote);
+        ledger[publication.key].status = publication.fallbackReason ? 'fallback' : 'published';
+        d.save({ ...d.load(), publicationLedger: ledger });
+      } catch (error) {
+        if (inline && publication.kind === 'inline') {
+          const fallback = {
+            ...publication,
+            kind: 'general' as const,
+            fallbackReason: `inline publication failed: ${error instanceof Error ? error.message : String(error)}`,
+          };
+          await publish(fallback, 'general-fallback');
+          return;
+        }
+        ledger[publication.key].status = 'failed';
+        d.save({ ...d.load(), publicationLedger: ledger });
+        throw error;
+      }
+    };
+    const header = {
+      schema: 'review.summary/v1' as const,
+      id: `${role}-summary`,
+      body: `${reviewMarker} round=${round} verdict=${verdict} commit=${commit}\n\n${payload.summary}\n\n${payload.evidence.map((item) => `- ${item}`).join('\n')}`,
+    };
+    await publish(publishArtifact(header, { runId, role, round, commit }, diffIndex), 'general');
+    for (const artifact of payload.artifacts) {
+      const publication = publishArtifact(artifact, { runId, role, round, commit }, diffIndex);
+      await publish(
+        publication,
+        publication.kind === 'inline' ? 'inline' : 'general',
+        publication.kind === 'inline',
+      );
+    }
     const body = [
-      `${marker} round=${round} verdict=${verdict} commit=${evidence.headRefOid}`,
+      `${reviewMarker} round=${round} verdict=${verdict} commit=${evidence.headRefOid}`,
       payload.summary,
       ...payload.evidence.map((item) => `- ${item}`),
       ...payload.artifacts.map((artifact) => `- [${artifact.id ?? 'note'}] ${artifact.body}`),
     ].join('\n\n');
-    if (!d.prComment) throw new Error('dispatcher PR publication adapter is required');
-    await d.prComment(prNumber, body);
     const refreshed = d.pullRequest ? await d.pullRequest(prNumber) : evidence;
     return { verdict, body, evidence: refreshed };
   }
@@ -1826,6 +1960,7 @@ async function main() {
     run: runCommand,
     pullRequest,
     prComment: commentPullRequest,
+    prInlineComment: inlineCommentPullRequest,
     now: Date.now,
     pid: () => process.pid,
     processAlive: defaultProcessAlive,

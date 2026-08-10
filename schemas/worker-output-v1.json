@@ -6,11 +6,32 @@
   "properties": {
     "schema": { "const": "llmchat.worker-output/v1" },
     "status": { "enum": ["ready_for_review", "blocked"] },
-    "resolutions": { "type": "array" },
+    "resolutions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["finding_id", "status", "response"],
+        "properties": {
+          "finding_id": { "type": "string", "pattern": "^[QS][0-9]+$" },
+          "status": { "enum": ["fixed", "answered", "not_fixed"] },
+          "response": { "type": "string", "minLength": 1 }
+        },
+        "additionalProperties": false
+      }
+    },
     "evidence": { "type": "array", "items": { "type": "string" } },
     "human_verification": {
       "type": "object",
-      "required": ["summary", "steps", "expected", "isolation", "limitations", "checklist"]
+      "required": ["summary", "steps", "expected", "isolation", "limitations", "checklist"],
+      "properties": {
+        "summary": { "type": "string", "minLength": 1 },
+        "steps": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+        "expected": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+        "isolation": { "type": "string", "minLength": 1 },
+        "limitations": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+        "checklist": { "type": "array", "items": { "type": "string", "minLength": 1 } }
+      },
+      "additionalProperties": false
     }
   },
   "additionalProperties": false
