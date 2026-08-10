@@ -26,6 +26,7 @@ import {
   githubReplyRequest,
   githubResolveReviewThreadRequest,
   githubReviewThreadLookupRequest,
+  parseReviewDiff,
   prepareWorkerBranch,
   prepareRecovery,
   recoverStaleLock,
@@ -36,6 +37,43 @@ import {
   resetRunState,
   runCommand,
 } from '../dist/dispatcher.js';
+
+test('local review diff preserves paths for modified and deleted files', () => {
+  const lines = parseReviewDiff(`diff --git a/src/modified.ts b/src/modified.ts
+--- a/src/modified.ts
++++ b/src/modified.ts
+@@ -4 +8,2 @@
+diff --git a/src/deleted.ts b/src/deleted.ts
+deleted file mode 100644
+--- a/src/deleted.ts
++++ /dev/null
+@@ -2,2 +0,0 @@`);
+
+  assert.deepEqual(lines, [
+    { path: 'src/modified.ts', side: 'RIGHT', line: 8 },
+    { path: 'src/modified.ts', side: 'RIGHT', line: 9 },
+    { path: 'src/modified.ts', side: 'LEFT', line: 4 },
+    { path: 'src/deleted.ts', side: 'LEFT', line: 2 },
+    { path: 'src/deleted.ts', side: 'LEFT', line: 3 },
+  ]);
+});
+
+test('local review diff uses old and new paths for renamed files', () => {
+  const lines = parseReviewDiff(`diff --git a/src/before.ts b/src/after.ts
+similarity index 80%
+rename from src/before.ts
+rename to src/after.ts
+--- a/src/before.ts
++++ b/src/after.ts
+@@ -3,2 +6,2 @@`);
+
+  assert.deepEqual(lines, [
+    { path: 'src/after.ts', side: 'RIGHT', line: 6 },
+    { path: 'src/after.ts', side: 'RIGHT', line: 7 },
+    { path: 'src/before.ts', side: 'LEFT', line: 3 },
+    { path: 'src/before.ts', side: 'LEFT', line: 4 },
+  ]);
+});
 
 function assertCodexRootReferences(schema) {
   assert.ok(schema.$defs?.output);

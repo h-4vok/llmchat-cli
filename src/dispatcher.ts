@@ -641,34 +641,51 @@ function inlineCommentPullRequest(
   return result.html_url ?? (result.id ? String(result.id) : '');
 }
 
-function localReviewDiff(commit: string): DiffLine[] {
-  let diff = '';
-  try {
-    diff = execFileSync('git', ['diff', '--unified=0', `origin/staging...${commit}`], {
-      cwd: root,
-      encoding: 'utf8',
-    });
-  } catch {
-    return [];
-  }
+export function parseReviewDiff(diff: string): DiffLine[] {
   const lines: DiffLine[] = [];
-  let path = '';
+  let oldPath = '';
+  let newPath = '';
   for (const line of diff.split(/\r?\n/)) {
-    const file = line.match(/^\+\+\+ b\/(.+)$/);
-    if (file) {
-      path = file[1];
+    if (line.startsWith('diff --git ')) {
+      oldPath = '';
+      newPath = '';
+      continue;
+    }
+    const oldFile = line.match(/^--- (?:a\/(.+)|\/dev\/null)$/);
+    if (oldFile) {
+      oldPath = oldFile[1] ?? '';
+      continue;
+    }
+    const newFile = line.match(/^\+\+\+ (?:b\/(.+)|\/dev\/null)$/);
+    if (newFile) {
+      newPath = newFile[1] ?? '';
       continue;
     }
     const hunk = line.match(/^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/);
-    if (!hunk || !path) continue;
+    if (!hunk) continue;
     const oldStart = Number(hunk[1]);
     const oldCount = Number(hunk[2] ?? 1);
     const newStart = Number(hunk[3]);
     const newCount = Number(hunk[4] ?? 1);
-    for (let i = 0; i < newCount; i++) lines.push({ path, side: 'RIGHT', line: newStart + i });
-    for (let i = 0; i < oldCount; i++) lines.push({ path, side: 'LEFT', line: oldStart + i });
+    for (let i = 0; newPath && i < newCount; i++)
+      lines.push({ path: newPath, side: 'RIGHT', line: newStart + i });
+    for (let i = 0; oldPath && i < oldCount; i++)
+      lines.push({ path: oldPath, side: 'LEFT', line: oldStart + i });
   }
   return lines;
+}
+
+function localReviewDiff(commit: string): DiffLine[] {
+  try {
+    return parseReviewDiff(
+      execFileSync('git', ['diff', '--unified=0', `origin/staging...${commit}`], {
+        cwd: root,
+        encoding: 'utf8',
+      }),
+    );
+  } catch {
+    return [];
+  }
 }
 
 function commentIssueOnce(issue: number, body: string): void {
