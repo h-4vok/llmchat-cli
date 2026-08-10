@@ -775,6 +775,168 @@ test('valid structured Worker output is dispatcher-published without role-author
   assert.equal(h.state().status, 'ready_for_human_merge');
 });
 
+test('Worker context separates legacy review IDs while preserving resolvable v1 findings', async () => {
+  const reviewerEnvelope = {
+    schema: 'llmchat.agent-output/v1',
+    message_id: 'qa-current-q1',
+    producer: { role: 'qa' },
+    context: {
+      run_id: 'prior-run',
+      issue: 1,
+      pr: 14,
+      round: 1,
+      commit: 'a'.repeat(40),
+      feedback_cursor: 'prior-cursor',
+    },
+    output: {
+      schema: 'llmchat.reviewer-output/v1',
+      result: 'changes_requested',
+      summary: 'Current structured QA finding.',
+      evidence: ['Deterministic fixture.'],
+      artifacts: [
+        {
+          schema: 'review.finding/v1',
+          id: 'Q1',
+          body: 'Fix the current structured boundary regression.',
+          placement: { kind: 'general' },
+        },
+      ],
+      dispositions: {},
+    },
+  };
+  const staffEnvelope = {
+    ...reviewerEnvelope,
+    message_id: 'staff-current-s2',
+    producer: { role: 'staff' },
+    output: {
+      ...reviewerEnvelope.output,
+      summary: 'Current structured Staff finding.',
+      artifacts: [
+        {
+          schema: 'review.finding/v1',
+          id: 'S2',
+          body: 'Preserve the current structured lifecycle routing.',
+          placement: { kind: 'general' },
+        },
+      ],
+    },
+  };
+  const h = harness([{ number: 1, title: 'a' }], {
+    publishEvidence: { qa: false, staff: false },
+    initialState: {
+      issue: 1,
+      pr: 14,
+      branch: 'codex/issue-1',
+      headSha: 'abc0',
+      status: 'worker_recovery_pending',
+      reviewRound: 2,
+      lastStaffFeedback:
+        '[Staff Review] round=1 verdict=changes_requested\n- [S1] high - legacy-only finding',
+      agentEnvelopes: {
+        [reviewerEnvelope.message_id]: reviewerEnvelope,
+        [staffEnvelope.message_id]: staffEnvelope,
+      },
+      humanFeedback: {
+        H1: { id: 'H1', status: 'open', body: 'Preserve the current human-feedback route.' },
+      },
+      publicationLedger: {
+        'qa-current-q1:Q1': {
+          key: 'qa-current-q1:Q1',
+          source_id: 'Q1',
+          status: 'published',
+          intended_action: 'general',
+          remote_id: 'review-q1',
+        },
+        'staff-current-s2:S2': {
+          key: 'staff-current-s2:S2',
+          source_id: 'S2',
+          status: 'published',
+          intended_action: 'general',
+          remote_id: 'review-s2',
+        },
+      },
+    },
+    structuredWorkerOutput: ({ spec, commit }) => {
+      assert.match(
+        spec.input,
+        /Current v1 reviewer findings eligible for Worker resolutions:\n- \[Q1\] Fix the current structured boundary regression\./,
+      );
+      assert.match(spec.input, /- \[S2\] Preserve the current structured lifecycle routing\./);
+      assert.match(
+        spec.input,
+        /Current human feedback to address in work\/evidence \(never Worker resolutions; Staff owns H dispositions\):\n- \[H1\] Preserve the current human-feedback route\./,
+      );
+      assert.match(
+        spec.input,
+        /Legacy review context \(informational and non-v1; IDs appearing only here are not actionable Worker resolution references\):[\s\S]*\[S1\]/,
+      );
+      assert.match(spec.input, /Populate output\.resolutions only for IDs listed under Current v1/);
+      return `<<<llmchat.agent-output/v1>>>\n${JSON.stringify({
+        schema: 'llmchat.agent-output/v1',
+        message_id: 'worker-resolves-current-q1',
+        producer: { role: 'worker' },
+        context: { ...dispatcherContext(spec), pr: 14, commit },
+        output: {
+          schema: 'llmchat.worker-output/v1',
+          status: 'ready_for_review',
+          resolutions: [
+            { finding_id: 'Q1', status: 'fixed', response: 'Fixed the current v1 finding.' },
+            {
+              finding_id: 'S2',
+              status: 'answered',
+              response: 'Answered the current Staff finding.',
+            },
+          ],
+          evidence: ['The current structured finding was addressed.'],
+          human_verification: {
+            summary: 'Verify current-v1 finding routing.',
+            steps: ['Run the deterministic dispatcher regression.'],
+            expected: ['Q1 is routed and legacy S1 is not emitted.'],
+            isolation: 'Use the credential-free harness.',
+            limitations: ['No live GitHub mutation is performed.'],
+            checklist: ['Confirm the Q1 Worker response publication.'],
+          },
+        },
+      })}\n<<<end llmchat.agent-output/v1>>>`;
+    },
+    structuredReviewerOutput: ({ spec, role }) =>
+      `<<<llmchat.agent-output/v1>>>\n${JSON.stringify({
+        schema: 'llmchat.agent-output/v1',
+        message_id: `${role}-resolves-current-context`,
+        producer: { role },
+        context: dispatcherContext(spec),
+        output: {
+          schema: 'llmchat.reviewer-output/v1',
+          result: 'accepted',
+          summary: `${role} accepted the current lifecycle response.`,
+          evidence: ['The current finding and feedback lifecycle was preserved.'],
+          artifacts: [],
+          dispositions: role === 'qa' ? { Q1: 'resolve' } : { S2: 'resolve', H1: 'resolve' },
+        },
+      })}\n<<<end llmchat.agent-output/v1>>>`,
+  });
+  h.deps.checkoutWorkerBranch = () => {};
+
+  await dispatch(h.cfg, h.deps);
+
+  const workerResponses = h.deps
+    .pullRequest(14)
+    .comments.filter((comment) => comment.body?.startsWith('[Worker] ref='));
+  assert.equal(workerResponses.length, 2);
+  assert.match(workerResponses[0].body, /ref=Q1 status=fixed/);
+  assert.match(workerResponses[1].body, /ref=S2 status=answered/);
+  assert.equal(
+    workerResponses.some((comment) => /ref=S1\b/.test(comment.body)),
+    false,
+  );
+  assert.equal(h.state().publicationLedger['qa-current-q1:Q1'].resolution_published, true);
+  assert.equal(h.state().publicationLedger['staff-current-s2:S2'].resolution_published, true);
+  assert.equal(h.state().publicationLedger['qa-current-q1:Q1'].status, 'resolved');
+  assert.equal(h.state().publicationLedger['staff-current-s2:S2'].status, 'resolved');
+  assert.equal(h.state().humanFeedback.H1.status, 'resolved');
+  assert.equal(h.state().status, 'ready_for_human_merge');
+});
+
 test('dispatcher accepts a Codex output file produced with its checked-in schema', async () => {
   const h = harness([{ number: 1, title: 'a' }], {
     structuredWorkerOutput: ({ spec, commit }) => {

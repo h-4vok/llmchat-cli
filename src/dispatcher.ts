@@ -989,7 +989,7 @@ function rolePrompt(
     ? `Dispatcher-issued envelope context (copy every supplied value exactly; placeholders such as "unknown" are invalid):\n${JSON.stringify(dispatcherContext)}\n`
     : '';
   if (role === 'worker')
-    return `Use the worker skill for GitHub issue #${issue.number}: ${issue.title}. This is dispatcher recovery run ${runId}, review round ${round}. Continue the existing task in the current checkout. ${pr ? `An existing PR is #${pr}; update that PR and never create a second PR.` : 'Create exactly one PR targeting staging if one does not exist.'} Do not merge. The claimed issue number is ${issue.number} (also in LLMCHAT_ISSUE_NUMBER). The dispatcher has generated the initial PR body in LLMCHAT_PR_BODY: ${JSON.stringify(initialPrBody ?? '')}. If creating a PR, pass that exact value to gh pr create using --body-file (or an equivalent file-based body argument); do not construct the closing reference yourself. When updating the PR, preserve every state-authorized closing reference supplied in the recovery context exactly once; do not add or remove other issue links without dispatcher instruction. Use gh pr create/edit (or equivalent) to persist that body. Inspect the issue, current PR diff, CI checks, mergeability, and all [QA/SDET Review] and [Staff Review] feedback. If the PR is CONFLICTING or DIRTY against staging, update the branch from staging, resolve every conflict, run the required checks, and do not report ready_for_review until the PR is clean and mergeable. Resolve every actionable finding. Do not publish GitHub review, evidence, or Worker comments: return exactly one llmchat.agent-output/v1 envelope as your final result; the dispatcher owns all publication. Include the structured human-verification guide in that envelope. ${exactContext}Return the resulting PR number and full post-work head commit in the remaining context fields. Never delete or modify .llmchat/state.json or dispatcher runtime state. Exit 0 only after the work, conflict resolution, and PR update are complete; do not return Markdown evidence. Issue body:\n${issueContext}\n${context ? `Recovered context:\n${context}\n` : ''}${feedback ? `Actionable feedback to resolve:\n${feedback}\n` : ''}`;
+    return `Use the worker skill for GitHub issue #${issue.number}: ${issue.title}. This is dispatcher recovery run ${runId}, review round ${round}. Continue the existing task in the current checkout. ${pr ? `An existing PR is #${pr}; update that PR and never create a second PR.` : 'Create exactly one PR targeting staging if one does not exist.'} Do not merge. The claimed issue number is ${issue.number} (also in LLMCHAT_ISSUE_NUMBER). The dispatcher has generated the initial PR body in LLMCHAT_PR_BODY: ${JSON.stringify(initialPrBody ?? '')}. If creating a PR, pass that exact value to gh pr create using --body-file (or an equivalent file-based body argument); do not construct the closing reference yourself. When updating the PR, preserve every state-authorized closing reference supplied in the recovery context exactly once; do not add or remove other issue links without dispatcher instruction. Use gh pr create/edit (or equivalent) to persist that body. Inspect the issue, current PR diff, CI checks, mergeability, and relevant review context. Populate output.resolutions only for IDs listed under Current v1 reviewer findings; never emit a resolution for an ID found only in legacy Markdown, issue/PR comments, or human H feedback. Address current human feedback in the work and evidence; Staff owns its H-item disposition lifecycle. If the PR is CONFLICTING or DIRTY against staging, update the branch from staging, resolve every conflict, run the required checks, and do not report ready_for_review until the PR is clean and mergeable. Resolve every actionable current v1 finding. Do not publish GitHub review, evidence, or Worker comments: return exactly one llmchat.agent-output/v1 envelope as your final result; the dispatcher owns all publication. Include the structured human-verification guide in that envelope. ${exactContext}Return the resulting PR number and full post-work head commit in the remaining context fields. Never delete or modify .llmchat/state.json or dispatcher runtime state. Exit 0 only after the work, conflict resolution, and PR update are complete; do not return Markdown evidence. Issue body:\n${issueContext}\n${context ? `Recovered context:\n${context}\n` : ''}${feedback ? `${feedback}\n` : ''}`;
   if (role === 'qa')
     return `Use the qa-sdet skill for GitHub issue #${issue.number}: ${issue.title}. Review PR #${pr} against staging before Staff. Current head is ${headSha ?? 'unknown'} and this is review round ${round}. ${exactContext}The same machine-readable JSON is available in LLMCHAT_AGENT_CONTEXT and enforced as constants by the supplied Codex schema. Inspect the acceptance criteria, diff, CI check results, regression coverage, and smoke evidence. Do not publish directly to GitHub. Return exactly one llmchat.agent-output/v1 envelope using the supplied reviewer schema, with typed findings, notes, summary, evidence, and dispositions. Do not edit code or merge. Exit 0 after returning the structured envelope. Issue body:\n${issueContext}`;
   return `Use the staff-reviewer skill for GitHub issue #${issue.number}: ${issue.title}. Review PR #${pr} against staging after QA has passed. Current head is ${headSha ?? 'unknown'} and this is review round ${round}. ${exactContext}The same machine-readable JSON is available in LLMCHAT_AGENT_CONTEXT and enforced as constants by the supplied Codex schema. Perform the independent adversarial review for design, security, regressions, boundaries, and abuse cases. Do not publish directly to GitHub. Return exactly one llmchat.agent-output/v1 envelope using the supplied reviewer schema, with typed findings, notes, summary, evidence, and dispositions. Do not edit code or merge. Exit 0 after returning the structured envelope. Issue body:\n${issueContext}`;
@@ -1537,6 +1537,43 @@ function findingState(state: State, role?: 'worker' | 'qa' | 'staff'): EnvelopeV
     openHumanFeedbackIds,
     ...(role ? { role } : {}),
   };
+}
+
+function workerFeedbackContext(state: State, legacyFeedback: string): string {
+  const open = new Set(findingState(state).openFindingIds ?? []);
+  const findings = new Map<string, string>();
+  for (const envelope of Object.values(state.agentEnvelopes ?? {})) {
+    const output = envelope.output as ReviewerOutput | WorkerOutput;
+    if (!('artifacts' in output)) continue;
+    for (const artifact of output.artifacts)
+      if (artifact.schema === 'review.finding/v1' && artifact.id && open.has(artifact.id))
+        findings.set(artifact.id, artifact.body);
+  }
+  const findingLines = [...open]
+    .sort()
+    .map((id) => `- [${id}] ${findings.get(id) ?? '(finding body retained in the v1 ledger)'}`);
+  const humanLines = Object.entries(state.humanFeedback ?? {})
+    .filter(
+      ([id, item]) =>
+        /^H\d+$/.test(id) &&
+        (item as any)?.status !== 'withdrawn' &&
+        (item as any)?.status !== 'resolved',
+    )
+    .sort(([left], [right]) => left.localeCompare(right, undefined, { numeric: true }))
+    .map(([id, item]) => `- [${id}] ${(item as any)?.body ?? '(feedback body unavailable)'}`);
+  const sections = [
+    `Current v1 reviewer findings eligible for Worker resolutions:\n${
+      findingLines.join('\n') || '(none; output.resolutions must be empty)'
+    }`,
+    `Current human feedback to address in work/evidence (never Worker resolutions; Staff owns H dispositions):\n${
+      humanLines.join('\n') || '(none)'
+    }`,
+  ];
+  if (legacyFeedback.trim())
+    sections.push(
+      `Legacy review context (informational and non-v1; IDs appearing only here are not actionable Worker resolution references):\n${legacyFeedback}`,
+    );
+  return sections.join('\n\n');
 }
 
 function retainEnvelope(d: Deps, envelope: Envelope): void {
@@ -2177,6 +2214,7 @@ async function runWorker(
     issue.number,
     d.load().linkedClosingIssues ?? [],
   );
+  const workerFeedback = workerFeedbackContext(d.load(), feedback);
   const output = await d.run(
     withWorkerLifecycle(
       d,
@@ -2194,7 +2232,7 @@ async function runWorker(
             pr,
             round,
             context,
-            feedback,
+            workerFeedback,
             d.load().headSha,
             runId,
             initialPrBody,

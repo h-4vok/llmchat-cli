@@ -299,10 +299,7 @@ function validateWorkerOutput(
     if (!Array.isArray(guide[key]) || !guide[key].every(nonEmpty))
       throw new Error('invalid human verification guide');
   const ids = new Set<string>();
-  const known = new Set([
-    ...(expected.allocatedFindingIds ?? []),
-    ...(expected.openFindingIds ?? []),
-  ]);
+  const known = new Set(expected.openFindingIds ?? []);
   for (const resolution of output.resolutions) {
     if (
       !isRecord(resolution) ||
@@ -312,7 +309,7 @@ function validateWorkerOutput(
       !nonEmpty(resolution.response)
     )
       throw new Error('invalid worker resolution');
-    if (known.size > 0 && !known.has(String(resolution.finding_id)))
+    if (!known.has(String(resolution.finding_id)))
       throw new Error(`unknown worker finding reference: ${String(resolution.finding_id)}`);
     ids.add(String(resolution.finding_id));
   }

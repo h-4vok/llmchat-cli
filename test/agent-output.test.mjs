@@ -127,6 +127,30 @@ test('Worker resolution references must exist in persisted reviewer findings', (
       }),
     /unknown worker finding reference/,
   );
+  assert.throws(
+    () => validateEnvelope(worker, { ...context, role: 'worker' }),
+    /unknown worker finding reference/,
+  );
+  assert.doesNotThrow(() =>
+    validateEnvelope(
+      {
+        ...worker,
+        output: {
+          ...worker.output,
+          resolutions: [
+            { finding_id: 'Q1', status: 'fixed', response: 'fixed Q1' },
+            { finding_id: 'S2', status: 'answered', response: 'answered S2' },
+          ],
+        },
+      },
+      {
+        ...context,
+        role: 'worker',
+        allocatedFindingIds: ['Q1', 'S2'],
+        openFindingIds: ['Q1', 'S2'],
+      },
+    ),
+  );
 });
 
 test('placement validates sides and every line in a range', () => {
