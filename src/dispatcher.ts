@@ -844,10 +844,10 @@ function rolePrompt(
 ): string {
   const issueContext = issue.body?.trim() || '(issue body unavailable; inspect it with gh)';
   if (role === 'worker')
-    return `Use the worker skill for GitHub issue #${issue.number}: ${issue.title}. This is dispatcher recovery run ${runId}, review round ${round}. Continue the existing task in the current checkout. ${pr ? `An existing PR is #${pr}; update that PR and never create a second PR.` : 'Create exactly one PR targeting staging if one does not exist.'} Do not merge. The claimed issue number is ${issue.number} (also in LLMCHAT_ISSUE_NUMBER). The dispatcher has generated the initial PR body in LLMCHAT_PR_BODY: ${JSON.stringify(initialPrBody ?? '')}. If creating a PR, pass that exact value to gh pr create using --body-file (or an equivalent file-based body argument); do not construct the closing reference yourself. When updating the PR, preserve every state-authorized closing reference supplied in the recovery context exactly once; do not add or remove other issue links without dispatcher instruction. Use gh pr create/edit (or equivalent) to persist that body. Inspect the issue, current PR diff, CI checks, mergeability, and all [QA/SDET Review] and [Staff Review] feedback. If the PR is CONFLICTING or DIRTY against staging, update the branch from staging, resolve every conflict, run the required checks, and do not report ready_for_review until the PR is clean and mergeable. Resolve every actionable finding and publish one PR conversation comment beginning with [Worker], including round=${round}, status=ready_for_review, pr=<number>, base=staging, and commit=<current head SHA>. In that evidence include a [Human Verification] JSON code block with non-empty summary, steps, expected, isolation, limitations, and checklist fields. Make the steps concrete, safe, and isolated; state diagnostics for failures; do not claim automated checks that were not run. The dispatcher will validate and publish the guide only after CI, QA, and Staff pass. Never delete or modify .llmchat/state.json or dispatcher runtime state. Exit 0 only after the work, conflict resolution, and comment are complete; do not return JSON. Issue body:\n${issueContext}\n${context ? `Recovered context:\n${context}\n` : ''}${feedback ? `Actionable feedback to resolve:\n${feedback}\n` : ''}At the end, print a plain-text line exactly like WORKER_RESULT pr=<number> base=staging. All command success/failure is communicated by the process exit code.`;
+    return `Use the worker skill for GitHub issue #${issue.number}: ${issue.title}. This is dispatcher recovery run ${runId}, review round ${round}. Continue the existing task in the current checkout. ${pr ? `An existing PR is #${pr}; update that PR and never create a second PR.` : 'Create exactly one PR targeting staging if one does not exist.'} Do not merge. The claimed issue number is ${issue.number} (also in LLMCHAT_ISSUE_NUMBER). The dispatcher has generated the initial PR body in LLMCHAT_PR_BODY: ${JSON.stringify(initialPrBody ?? '')}. If creating a PR, pass that exact value to gh pr create using --body-file (or an equivalent file-based body argument); do not construct the closing reference yourself. When updating the PR, preserve every state-authorized closing reference supplied in the recovery context exactly once; do not add or remove other issue links without dispatcher instruction. Use gh pr create/edit (or equivalent) to persist that body. Inspect the issue, current PR diff, CI checks, mergeability, and all [QA/SDET Review] and [Staff Review] feedback. If the PR is CONFLICTING or DIRTY against staging, update the branch from staging, resolve every conflict, run the required checks, and do not report ready_for_review until the PR is clean and mergeable. Resolve every actionable finding. Do not publish GitHub review, evidence, or Worker comments: return exactly one llmchat.agent-output/v1 envelope as your final result; the dispatcher owns all publication. Include the structured human-verification guide in that envelope. Never delete or modify .llmchat/state.json or dispatcher runtime state. Exit 0 only after the work, conflict resolution, and PR update are complete; do not return Markdown evidence. Issue body:\n${issueContext}\n${context ? `Recovered context:\n${context}\n` : ''}${feedback ? `Actionable feedback to resolve:\n${feedback}\n` : ''}`;
   if (role === 'qa')
-    return `Use the qa-sdet skill for GitHub issue #${issue.number}: ${issue.title}. Review PR #${pr} against staging before Staff. Current head is ${headSha ?? 'unknown'} and this is review round ${round}. Inspect the acceptance criteria, diff, CI check results, regression coverage, and smoke evidence. Publish directly to the PR exactly one review beginning [QA/SDET Review] round=${round} verdict=passed, changes_requested, or blocked. Include Q<n> findings, exact evidence, and commit=${headSha ?? 'current'}. Do not edit code or merge. Exit 0 after publishing the review; do not return JSON. Issue body:\n${issueContext}`;
-  return `Use the staff-reviewer skill for GitHub issue #${issue.number}: ${issue.title}. Review PR #${pr} against staging after QA has passed. Current head is ${headSha ?? 'unknown'} and this is review round ${round}. Perform the independent adversarial review for design, security, regressions, boundaries, and abuse cases. Publish directly to the PR exactly one review beginning [Staff Review] round=${round} verdict=approved or changes_requested, include S<n> findings when needed, and include commit=${headSha ?? 'current'}. Do not edit code or merge. Exit 0 after publishing the review; do not return JSON. Issue body:\n${issueContext}`;
+    return `Use the qa-sdet skill for GitHub issue #${issue.number}: ${issue.title}. Review PR #${pr} against staging before Staff. Current head is ${headSha ?? 'unknown'} and this is review round ${round}. Inspect the acceptance criteria, diff, CI check results, regression coverage, and smoke evidence. Do not publish directly to GitHub. Return exactly one llmchat.agent-output/v1 envelope using the supplied reviewer schema, with typed findings, notes, summary, evidence, and dispositions. Do not edit code or merge. Exit 0 after returning the structured envelope. Issue body:\n${issueContext}`;
+  return `Use the staff-reviewer skill for GitHub issue #${issue.number}: ${issue.title}. Review PR #${pr} against staging after QA has passed. Current head is ${headSha ?? 'unknown'} and this is review round ${round}. Perform the independent adversarial review for design, security, regressions, boundaries, and abuse cases. Do not publish directly to GitHub. Return exactly one llmchat.agent-output/v1 envelope using the supplied reviewer schema, with typed findings, notes, summary, evidence, and dispositions. Do not edit code or merge. Exit 0 after returning the structured envelope. Issue body:\n${issueContext}`;
 }
 
 function roleCommand(value: Command | undefined, issue: number, cfg: Config): Spec | undefined {
@@ -883,7 +883,7 @@ function structuredRoleSpec(spec: Spec, role: 'worker' | 'qa' | 'staff', runId: 
   const schema = join(
     root,
     'schemas',
-    role === 'worker' ? 'worker-output-v1.json' : 'reviewer-output-v1.json',
+    role === 'worker' ? 'worker-agent-output-v1.json' : 'reviewer-agent-output-v1.json',
   );
   const lastMessage = join(runDir, `${role}.json`);
   const has = (flag: string) => spec.args.includes(flag);
@@ -984,6 +984,14 @@ function workerMetadata(output: string, knownPr?: number): { pr?: number; base?:
 
 const publicationMarker = '<!-- llmchat-review-publish:v1';
 const workerPublicationMarker = '<!-- llmchat-worker-publish:v1';
+function humanFeedbackCursor(state: State): string {
+  const items = Object.values(state.humanFeedback ?? {})
+    .map((item: any) => `${item.id}:${item.context_cursor ?? ''}:${item.status ?? ''}`)
+    .sort()
+    .join('|');
+  return createHash('sha256').update(items).digest('hex');
+}
+
 function ingestHumanFeedback(d: Deps, pr: PullRequest, issue?: number): void {
   const state = d.load();
   const feedback = { ...(state.humanFeedback ?? {}) } as Record<string, any>;
@@ -1640,6 +1648,7 @@ async function runReview(
   if (!spec) throw new Error(`${role} command is required`);
   const runId = d.load().workerRunId ?? randomUUID();
   if (d.pullRequest) ingestHumanFeedback(d, await d.pullRequest(prNumber), issue.number);
+  const feedbackCursorBefore = humanFeedbackCursor(d.load());
   const output = await d.run(
     structuredRoleSpec(
       {
@@ -1673,6 +1682,45 @@ async function runReview(
     output,
   );
   if (structured) {
+    const current = d.pullRequest ? await d.pullRequest(prNumber) : evidence;
+    if (d.pullRequest) ingestHumanFeedback(d, current, issue.number);
+    const feedbackCursorAfter = humanFeedbackCursor(d.load());
+    if (current.headRefOid !== commit || feedbackCursorAfter !== feedbackCursorBefore) {
+      const stalePayload = structured.output as ReviewerOutput;
+      const staleKey = createHash('sha256')
+        .update(`${structured.message_id}:stale_context:${commit}`)
+        .digest('hex')
+        .slice(0, 32);
+      const staleBody = [
+        `${marker} round=${round} stale_context commit=${commit} current_commit=${current.headRefOid ?? 'unknown'}`,
+        `<!-- llmchat-review-publish:v1 key=${staleKey} -->`,
+        'This structured review result is informational only because the PR head or human-feedback context changed while the review was running.',
+        stalePayload.summary,
+        ...stalePayload.evidence.map((item) => `- ${item}`),
+        ...stalePayload.artifacts.map(
+          (artifact) => `- [${artifact.id ?? 'note'}] ${artifact.body}`,
+        ),
+      ].join('\n\n');
+      if (d.prComment) {
+        const ledger = { ...(d.load().publicationLedger ?? {}) } as Record<string, any>;
+        if (!ledger[staleKey]) {
+          ledger[staleKey] = {
+            key: staleKey,
+            status: 'pending',
+            action: 'stale_context',
+            placement: 'general',
+            artifact: staleBody,
+            envelope_hash: envelopeHash(structured),
+            context_cursor: structured.context.feedback_cursor,
+          };
+          d.save({ ...d.load(), publicationLedger: ledger });
+          await d.prComment(prNumber, staleBody);
+          ledger[staleKey].status = 'published';
+          d.save({ ...d.load(), publicationLedger: ledger });
+        }
+      }
+      return runReview(cfg, d, issue, role, prNumber, round, current);
+    }
     retainEnvelope(d, structured);
     const payload = structured.output as ReviewerOutput;
     if (payload.result === 'blocked') throw new Error(`${role} returned blocked structured output`);

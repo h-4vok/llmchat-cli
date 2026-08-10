@@ -567,6 +567,21 @@ test('valid structured Worker output is dispatcher-published without role-author
   assert.equal(h.state().status, 'ready_for_human_merge');
 });
 
+test('Codex roles receive full envelope schemas and publication-owned prompts', async () => {
+  const h = harness();
+  await dispatch(h.cfg, h.deps);
+  const worker = h.runs.find((run) => run.input?.includes('Use the worker skill'));
+  const qa = h.runs.find((run) => run.input?.includes('Use the qa-sdet skill'));
+  const staff = h.runs.find((run) => run.input?.includes('Use the staff-reviewer skill'));
+  assert.match(worker.args.join(' '), /worker-agent-output-v1\.json/);
+  assert.match(qa.args.join(' '), /reviewer-agent-output-v1\.json/);
+  assert.match(staff.args.join(' '), /reviewer-agent-output-v1\.json/);
+  for (const run of [worker, qa, staff]) {
+    assert.match(run.input, /return exactly one llmchat\.agent-output\/v1 envelope/i);
+    assert.match(run.input, /Do not publish directly to GitHub|Do not publish GitHub/);
+  }
+});
+
 test('existing human guide for the current commit is not published twice', async () => {
   const h = harness(undefined, { existingHumanGuides: 1 });
   await dispatch(h.cfg, h.deps);
