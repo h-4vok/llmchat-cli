@@ -269,7 +269,8 @@ function validateReviewerOutput(
   for (const id of open) {
     if (role === 'qa' && !id.startsWith('Q')) continue;
     if (role === 'staff' && !id.startsWith('S')) continue;
-    if (!(id in dispositions)) throw new Error(`missing disposition for open finding ${id}`);
+    if (!(id in dispositions) && output.result !== 'accepted')
+      throw new Error(`missing disposition for open finding ${id}`);
   }
   const allocated = new Set(expected.allocatedFindingIds ?? []);
   for (const artifact of output.artifacts as Array<Record<string, unknown>>) {

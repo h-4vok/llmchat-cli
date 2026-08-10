@@ -1064,9 +1064,10 @@ test('QA receives only current owned Q findings and resolves each required dispo
         });
         assert.deepEqual(schema.$defs.output.properties.dispositions, {
           type: 'object',
-          description: 'Emit exactly one disposition for each currently open owned item: Q1.',
+          description:
+            'Emit continue or resolve for open owned findings unless an accepted review no longer emits them; accepted omissions are automatically waived. Staff must always explicitly handle open human feedback. Current items: Q1.',
           properties: {
-            Q1: { type: 'string', enum: ['continue', 'resolve'] },
+            Q1: { type: ['string', 'null'], enum: ['continue', 'resolve', null] },
           },
           required: ['Q1'],
           additionalProperties: false,
@@ -1103,9 +1104,14 @@ test('QA receives only current owned Q findings and resolves each required dispo
     h.state().agentEnvelopes['qa-lifecycle-resolution'].output.dispositions.Q1,
     'resolve',
   );
+  const explicitAudit =
+    h.state().publicationLedger['lifecycle:qa-lifecycle-resolution:Q1:explicit_resolve'];
+  assert.equal(explicitAudit.status, 'resolved');
+  assert.equal(explicitAudit.decision, 'explicit_resolve');
+  assert.equal(explicitAudit.trigger, 'explicit_disposition');
 });
 
-test('QA omission of a current Q disposition is rejected before acceptance publication', async () => {
+test('accepted QA omission continues with a durable automatic Q waiver', async () => {
   const commit = '0123456789abcdef0123456789abcdef01234567';
   const currentFinding = {
     schema: 'llmchat.agent-output/v1',
@@ -1146,25 +1152,259 @@ test('QA omission of a current Q disposition is rejected before acceptance publi
       status: 'worker_recovery_pending',
       reviewRound: 2,
       agentEnvelopes: { [currentFinding.message_id]: currentFinding },
+      publicationLedger: {
+        'qa-open-q1-before-omission:Q1': {
+          key: 'qa-open-q1-before-omission:Q1',
+          source_id: 'Q1',
+          status: 'published',
+          intended_action: 'general',
+        },
+      },
     },
     structuredWorkerOutput: ({ spec, commit: workerCommit }) =>
       readyWorkerEnvelope(spec, workerCommit, 'worker-before-qa-disposition-omission'),
     structuredReviewerOutput: ({ spec, role }) => {
-      assert.equal(role, 'qa');
-      assert.deepEqual(reviewerLifecycleContext(spec).open_owned_findings, [
-        { id: 'Q1', body: 'Disposition Q1 before accepting.' },
-      ]);
+      if (role === 'qa')
+        assert.deepEqual(reviewerLifecycleContext(spec).open_owned_findings, [
+          { id: 'Q1', body: 'Disposition Q1 before accepting.' },
+        ]);
+      else assert.deepEqual(reviewerLifecycleContext(spec).open_owned_findings, []);
       return `<<<llmchat.agent-output/v1>>>\n${JSON.stringify({
         schema: 'llmchat.agent-output/v1',
-        message_id: 'qa-omits-current-q1',
+        message_id: `${role}-accepts-without-current-findings`,
         producer: { role },
         context: dispatcherContext(spec),
         output: {
           schema: 'llmchat.reviewer-output/v1',
           result: 'accepted',
-          summary: 'QA incorrectly omitted Q1.',
-          evidence: ['The fixture intentionally omits the required disposition.'],
+          summary: `${role} accepted without a current finding.`,
+          evidence: ['The prior finding no longer appears in the current review.'],
           artifacts: [],
+          dispositions: {},
+        },
+      })}\n<<<end llmchat.agent-output/v1>>>`;
+    },
+  });
+  h.deps.checkoutWorkerBranch = () => {};
+
+  await dispatch(h.cfg, h.deps);
+
+  assert.deepEqual(h.counts(), { workerCount: 1, qaCount: 1, staffCount: 1 });
+  assert.equal(h.state().status, 'ready_for_human_merge');
+  assert.deepEqual(
+    h.state().agentEnvelopes['qa-accepts-without-current-findings'].output.dispositions,
+    {},
+  );
+  assert.equal(
+    h.state().publicationLedger['qa-open-q1-before-omission:Q1'].lifecycle_decision,
+    'automatic_waive',
+  );
+  const audit =
+    h.state().publicationLedger['lifecycle:qa-accepts-without-current-findings:Q1:automatic_waive'];
+  assert.equal(audit.action, 'reviewer-lifecycle');
+  assert.equal(audit.status, 'resolved');
+  assert.equal(audit.source_id, 'Q1');
+  assert.equal(audit.source_key, 'qa-open-q1-before-omission:Q1');
+  assert.equal(audit.decision, 'automatic_waive');
+  assert.equal(audit.trigger, 'accepted_omission');
+  assert.equal(audit.role, 'qa');
+  assert.equal(audit.round, 2);
+  assert.equal(audit.commit, commit);
+  assert.equal(audit.envelope, 'qa-accepts-without-current-findings');
+  assert.equal(audit.intended_action, 'general_resolution');
+  assert.equal(
+    audit.run,
+    h.state().agentEnvelopes['qa-accepts-without-current-findings'].context.run_id,
+  );
+  assert.match(
+    h.deps
+      .pullRequest(14)
+      .comments.find((comment) => comment.body?.includes('ref=Q1 disposition=automatic_waive'))
+      .body,
+    /^\[QA\/SDET Review\]/,
+  );
+});
+
+test('approved Staff omission continues with an automatic S waiver through the inline endpoint', async () => {
+  const commit = '0123456789abcdef0123456789abcdef01234567';
+  const currentFinding = {
+    schema: 'llmchat.agent-output/v1',
+    message_id: 'staff-open-s1-before-omission',
+    producer: { role: 'staff' },
+    context: {
+      run_id: 'staff-omission-run',
+      issue: 1,
+      pr: 14,
+      round: 1,
+      commit,
+      feedback_cursor: 'prior-cursor',
+    },
+    output: {
+      schema: 'llmchat.reviewer-output/v1',
+      result: 'changes_requested',
+      summary: 'Current open Staff finding.',
+      evidence: ['Deterministic Staff omission fixture.'],
+      artifacts: [
+        {
+          schema: 'review.finding/v1',
+          id: 'S1',
+          body: 'Preserve the S1 inline resolution endpoint.',
+          placement: { kind: 'general' },
+        },
+      ],
+      dispositions: {},
+    },
+  };
+  const h = harness([{ number: 1, title: 'a' }], {
+    headRefOid: commit,
+    initialState: {
+      issue: 1,
+      pr: 14,
+      branch: 'codex/issue-1',
+      headSha: commit,
+      workerRunId: 'staff-omission-run',
+      status: 'worker_recovery_pending',
+      reviewRound: 2,
+      agentEnvelopes: { [currentFinding.message_id]: currentFinding },
+      publicationLedger: {
+        'staff-open-s1-before-omission:S1': {
+          key: 'staff-open-s1-before-omission:S1',
+          source_id: 'S1',
+          status: 'published',
+          intended_action: 'inline',
+          remote_id: 'inline-s1',
+        },
+      },
+    },
+    structuredWorkerOutput: ({ spec, commit: workerCommit }) =>
+      readyWorkerEnvelope(spec, workerCommit, 'worker-before-staff-omission'),
+    structuredReviewerOutput: ({ spec, role }) => {
+      if (role === 'qa')
+        return `<<<llmchat.agent-output/v1>>>\n${JSON.stringify({
+          schema: 'llmchat.agent-output/v1',
+          message_id: 'qa-accepts-before-staff-omission',
+          producer: { role },
+          context: dispatcherContext(spec),
+          output: {
+            schema: 'llmchat.reviewer-output/v1',
+            result: 'accepted',
+            summary: 'QA accepted before the Staff lifecycle check.',
+            evidence: ['QA has no owned open findings.'],
+            artifacts: [],
+            dispositions: {},
+          },
+        })}\n<<<end llmchat.agent-output/v1>>>`;
+      assert.deepEqual(reviewerLifecycleContext(spec), {
+        open_owned_findings: [{ id: 'S1', body: 'Preserve the S1 inline resolution endpoint.' }],
+        open_human_feedback_ids: [],
+      });
+      const schemaPath = spec.args[spec.args.indexOf('--output-schema') + 1];
+      const schema = JSON.parse(readFileSync(schemaPath, 'utf8'));
+      assert.deepEqual(schema.$defs.output.properties.dispositions.properties.S1, {
+        type: ['string', 'null'],
+        enum: ['continue', 'resolve', null],
+      });
+      return `<<<llmchat.agent-output/v1>>>\n${JSON.stringify({
+        schema: 'llmchat.agent-output/v1',
+        message_id: 'staff-accepts-without-s1',
+        producer: { role },
+        context: dispatcherContext(spec),
+        output: {
+          schema: 'llmchat.reviewer-output/v1',
+          result: 'accepted',
+          summary: 'Staff approved after S1 disappeared from the current review.',
+          evidence: ['The prior Staff finding is no longer present.'],
+          artifacts: [],
+          dispositions: {},
+        },
+      })}\n<<<end llmchat.agent-output/v1>>>`;
+    },
+  });
+  h.deps.checkoutWorkerBranch = () => {};
+  const resolved = [];
+  h.deps.prResolve = async (pr, commentId) => resolved.push({ pr, commentId });
+
+  await dispatch(h.cfg, h.deps);
+
+  assert.deepEqual(h.counts(), { workerCount: 1, qaCount: 1, staffCount: 1 });
+  assert.equal(h.state().status, 'ready_for_human_merge');
+  assert.deepEqual(resolved, [{ pr: 14, commentId: 'inline-s1' }]);
+  assert.equal(
+    h.state().publicationLedger['staff-open-s1-before-omission:S1'].lifecycle_decision,
+    'automatic_waive',
+  );
+  const audit =
+    h.state().publicationLedger['lifecycle:staff-accepts-without-s1:S1:automatic_waive'];
+  assert.equal(audit.status, 'resolved');
+  assert.equal(audit.decision, 'automatic_waive');
+  assert.equal(audit.trigger, 'accepted_omission');
+  assert.equal(audit.intended_action, 'resolve_thread');
+});
+
+test('changes_requested omission of an open Q finding still blocks before publication', async () => {
+  const commit = '0123456789abcdef0123456789abcdef01234567';
+  const currentFinding = {
+    schema: 'llmchat.agent-output/v1',
+    message_id: 'qa-open-q1-before-changes-requested-omission',
+    producer: { role: 'qa' },
+    context: {
+      run_id: 'changes-requested-omission-run',
+      issue: 1,
+      pr: 14,
+      round: 1,
+      commit,
+      feedback_cursor: 'prior-cursor',
+    },
+    output: {
+      schema: 'llmchat.reviewer-output/v1',
+      result: 'changes_requested',
+      summary: 'Current open QA finding.',
+      evidence: ['Deterministic changes-requested omission fixture.'],
+      artifacts: [
+        {
+          schema: 'review.finding/v1',
+          id: 'Q1',
+          body: 'Q1 remains lifecycle-owned until explicitly continued or resolved.',
+          placement: { kind: 'general' },
+        },
+      ],
+      dispositions: {},
+    },
+  };
+  const h = harness([{ number: 1, title: 'a' }], {
+    headRefOid: commit,
+    initialState: {
+      issue: 1,
+      pr: 14,
+      branch: 'codex/issue-1',
+      headSha: commit,
+      workerRunId: 'changes-requested-omission-run',
+      status: 'worker_recovery_pending',
+      reviewRound: 2,
+      agentEnvelopes: { [currentFinding.message_id]: currentFinding },
+    },
+    structuredWorkerOutput: ({ spec, commit: workerCommit }) =>
+      readyWorkerEnvelope(spec, workerCommit, 'worker-before-changes-requested-omission'),
+    structuredReviewerOutput: ({ spec, role }) => {
+      assert.equal(role, 'qa');
+      return `<<<llmchat.agent-output/v1>>>\n${JSON.stringify({
+        schema: 'llmchat.agent-output/v1',
+        message_id: 'qa-changes-requested-omits-q1',
+        producer: { role },
+        context: dispatcherContext(spec),
+        output: {
+          schema: 'llmchat.reviewer-output/v1',
+          result: 'changes_requested',
+          summary: 'QA found another current defect but omitted Q1.',
+          evidence: ['Q2 is new while Q1 has no disposition.'],
+          artifacts: [
+            {
+              schema: 'review.finding/v1',
+              id: 'Q2',
+              body: 'A newly emitted finding keeps changes_requested internally consistent.',
+              placement: { kind: 'general' },
+            },
+          ],
           dispositions: {},
         },
       })}\n<<<end llmchat.agent-output/v1>>>`;
@@ -1176,7 +1416,13 @@ test('QA omission of a current Q disposition is rejected before acceptance publi
 
   assert.deepEqual(h.counts(), { workerCount: 1, qaCount: 1, staffCount: 0 });
   assert.match(h.state().lastErrorVerbose, /missing disposition for open finding Q1/);
-  assert.equal(h.state().agentEnvelopes['qa-omits-current-q1'], undefined);
+  assert.equal(h.state().agentEnvelopes['qa-changes-requested-omits-q1'], undefined);
+  assert.equal(
+    Object.values(h.state().publicationLedger ?? {}).some(
+      (entry) => entry.decision === 'automatic_waive',
+    ),
+    false,
+  );
   assert.equal(
     h.deps.pullRequest(14).comments.some((comment) => comment.body?.startsWith('[QA/SDET Review]')),
     false,

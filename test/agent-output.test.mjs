@@ -62,16 +62,51 @@ test('state-aware reviewer validation requires lifecycle dispositions and unique
       ],
     },
   };
+  assert.doesNotThrow(() =>
+    validateEnvelope(
+      {
+        ...envelope,
+        output: { ...envelope.output, result: 'accepted' },
+      },
+      { ...context, role: 'qa', openFindingIds: ['Q1'] },
+    ),
+  );
+  assert.throws(
+    () => validateEnvelope(finding, { ...context, role: 'qa', openFindingIds: ['Q1'] }),
+    /missing disposition for open finding Q1/,
+  );
+  assert.throws(
+    () =>
+      validateEnvelope(
+        {
+          ...finding,
+          output: { ...finding.output, result: 'accepted' },
+        },
+        { ...context, role: 'qa', openFindingIds: ['Q1'] },
+      ),
+    /accepted reviewer output has actionable findings/,
+  );
   assert.throws(
     () =>
       validateEnvelope(
         {
           ...envelope,
-          output: { ...envelope.output, result: 'accepted' },
+          output: { ...envelope.output, result: 'blocked' },
         },
         { ...context, role: 'qa', openFindingIds: ['Q1'] },
       ),
-    /missing disposition/,
+    /missing disposition for open finding Q1/,
+  );
+  assert.throws(
+    () =>
+      validateEnvelope(
+        {
+          ...envelope,
+          output: { ...envelope.output, dispositions: { Q1: 'continue' } },
+        },
+        { ...context, role: 'qa', openFindingIds: ['Q1'] },
+      ),
+    /accepted reviewer output has actionable findings/,
   );
   assert.doesNotThrow(() =>
     validateEnvelope(
@@ -116,6 +151,14 @@ test('state-aware reviewer validation requires lifecycle dispositions and unique
         { ...context, role: 'qa' },
       ),
     /schema additional field/,
+  );
+  assert.throws(
+    () =>
+      validateEnvelope(
+        { ...envelope, producer: { role: 'staff' } },
+        { ...context, role: 'staff', openHumanFeedbackIds: ['H1'] },
+      ),
+    /missing disposition for open feedback H1/,
   );
 });
 
