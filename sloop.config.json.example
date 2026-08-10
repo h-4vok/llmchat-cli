@@ -7,12 +7,12 @@
   },
   "staffReviewCommand": {
     "command": "codex",
-    "args": ["exec", "--sandbox", "read-only"],
+    "args": ["exec", "--sandbox", "danger-full-access"],
     "timeoutMs": 600000
   },
   "qaCommand": {
     "command": "codex",
-    "args": ["exec", "--sandbox", "workspace-write"],
+    "args": ["exec", "--sandbox", "danger-full-access"],
     "timeoutMs": 600000
   },
   "requiredPrChecks": ["pr-checks"],
