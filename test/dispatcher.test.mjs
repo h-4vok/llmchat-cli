@@ -17,6 +17,7 @@ import {
   acquire,
   childProcessInvocation,
   command,
+  assertCodexStructuredOutputsSchema,
   codexResponseSchema,
   dispatcherLockPath,
   dispatch,
@@ -312,6 +313,14 @@ function harness(
       }
       if (role === 'qa') {
         qaCount += 1;
+        if (overrides.structuredReviewerOutput)
+          return overrides.structuredReviewerOutput({
+            spec,
+            role,
+            round,
+            commit: pr.headRefOid,
+            count: qaCount,
+          });
         const verdict = qaVerdicts[qaCount - 1] ?? qaVerdicts.at(-1);
         if (publishEvidence.qa)
           reviews.push({
@@ -325,6 +334,14 @@ function harness(
       }
       if (role === 'staff') {
         staffCount += 1;
+        if (overrides.structuredReviewerOutput)
+          return overrides.structuredReviewerOutput({
+            spec,
+            role,
+            round,
+            commit: pr.headRefOid,
+            count: staffCount,
+          });
         const verdict = staffVerdicts[staffCount - 1] ?? staffVerdicts.at(-1);
         if (publishEvidence.staff)
           reviews.push({
@@ -741,6 +758,94 @@ test('dispatcher accepts a Codex output file produced with its checked-in schema
   );
 });
 
+test('dispatcher decodes Codex nullable fields and map entries before canonical validation', async () => {
+  const commit = '0123456789abcdef0123456789abcdef01234567';
+  const h = harness([{ number: 1, title: 'a' }], {
+    publishEvidence: { qa: false, staff: false },
+    structuredWorkerOutput: ({ runId }) =>
+      `<<<llmchat.agent-output/v1>>>\n${JSON.stringify({
+        schema: 'llmchat.agent-output/v1',
+        message_id: 'worker-before-codex-reviewer',
+        producer: { role: 'worker' },
+        context: {
+          run_id: runId,
+          issue: 1,
+          pr: 14,
+          round: 1,
+          commit,
+          feedback_cursor: 'cursor-1',
+        },
+        output: {
+          schema: 'llmchat.worker-output/v1',
+          status: 'ready_for_review',
+          resolutions: [],
+          evidence: ['Worker prepared the reviewer transport regression.'],
+          human_verification: {
+            summary: 'Verify Codex reviewer transport normalization.',
+            steps: ['Run the focused dispatcher regression.'],
+            expected: ['Nullable transport sentinels are absent from canonical state.'],
+            isolation: 'Use the credential-free dispatcher harness.',
+            limitations: ['No remote Codex request is made.'],
+            checklist: ['Confirm canonical reviewer validation still runs.'],
+          },
+        },
+      })}\n<<<end llmchat.agent-output/v1>>>`,
+    structuredReviewerOutput: ({ spec, role, round, commit: reviewedCommit }) => {
+      const outputPath = spec.args[spec.args.indexOf('--output-last-message') + 1];
+      const runId = outputPath.match(/[\\/]runs[\\/]([^\\/]+)[\\/]/)?.[1];
+      assert.ok(runId);
+      writeFileSync(
+        outputPath,
+        JSON.stringify({
+          schema: 'llmchat.agent-output/v1',
+          message_id: `${role}-codex-transport`,
+          producer: { role },
+          context: {
+            run_id: runId,
+            issue: 1,
+            pr: 14,
+            round,
+            commit: reviewedCommit,
+            feedback_cursor: 'cursor-1',
+          },
+          output: {
+            schema: 'llmchat.reviewer-output/v1',
+            result: 'accepted',
+            summary: `${role} accepted the transport-normalized response.`,
+            evidence: ['The generated schema passed the local supported-subset assertion.'],
+            artifacts:
+              role === 'qa'
+                ? [
+                    {
+                      schema: 'review.note/v1',
+                      id: null,
+                      body: 'Nullable fields use null only in the Codex transport.',
+                      severity: null,
+                      placement: null,
+                    },
+                  ]
+                : [],
+            dispositions: [],
+          },
+        }),
+      );
+      return `${role} visible stream`;
+    },
+  });
+
+  await dispatch(h.cfg, h.deps);
+
+  assert.equal(h.state().status, 'ready_for_human_merge');
+  assert.deepEqual(h.state().agentEnvelopes['qa-codex-transport'].output.artifacts[0], {
+    schema: 'review.note/v1',
+    body: 'Nullable fields use null only in the Codex transport.',
+  });
+  assert.deepEqual(
+    Object.entries(h.state().agentEnvelopes['qa-codex-transport'].output.dispositions),
+    [],
+  );
+});
+
 test('Codex response schemas hoist the exact nested external output reference', () => {
   for (const role of ['worker', 'reviewer']) {
     const envelope = JSON.parse(readFileSync(`schemas/${role}-agent-output-v1.json`, 'utf8'));
@@ -751,9 +856,82 @@ test('Codex response schemas hoist the exact nested external output reference', 
 
     assert.deepEqual(schema.properties.output, { $ref: '#/$defs/output' });
     assertCodexRootReferences(schema);
+    assert.doesNotThrow(() => assertCodexStructuredOutputsSchema(schema));
     const { $schema: ignoredSchema, $id: ignoredId, ...payloadContract } = output;
-    assert.deepEqual(schema.$defs.output, payloadContract);
+    if (role === 'worker') assert.deepEqual(schema.$defs.output, payloadContract);
   }
+});
+
+test('Codex response schema replaces the exact reviewer placement oneOf safely', () => {
+  const envelope = JSON.parse(readFileSync('schemas/reviewer-agent-output-v1.json', 'utf8'));
+  const output = JSON.parse(readFileSync('schemas/reviewer-output-v1.json', 'utf8'));
+  const canonicalPlacement = output.properties.artifacts.items.properties.placement;
+  assert.ok(canonicalPlacement.oneOf, 'canonical validation must retain the placement oneOf');
+
+  const schema = codexResponseSchema(envelope, output);
+  const artifact = schema.$defs.output.properties.artifacts.items;
+  const placement = artifact.properties.placement;
+  assert.equal(placement.oneOf, undefined);
+  assert.deepEqual(
+    placement.anyOf.map((alternative) => alternative.properties?.kind?.const ?? alternative.type),
+    ['general', 'inline', 'null'],
+  );
+  const inline = placement.anyOf[1];
+  assert.deepEqual(inline.required, ['kind', 'path', 'commit', 'side', 'line', 'start_line']);
+  assert.deepEqual(inline.properties.start_line.type, ['integer', 'null']);
+  assert.deepEqual(artifact.required, ['schema', 'id', 'body', 'severity', 'placement']);
+  assert.deepEqual(artifact.properties.id.type, ['string', 'null']);
+  assert.deepEqual(artifact.properties.severity.type, ['string', 'null']);
+  assert.ok(artifact.properties.severity.enum.includes(null));
+  assert.deepEqual(schema.$defs.output.properties.dispositions, {
+    type: 'array',
+    items: {
+      type: 'object',
+      properties: {
+        key: { type: 'string' },
+        value: { type: 'string', enum: ['continue', 'resolve'] },
+      },
+      required: ['key', 'value'],
+      additionalProperties: false,
+    },
+  });
+  assert.doesNotThrow(() => assertCodexStructuredOutputsSchema(schema));
+  assert.ok(
+    canonicalPlacement.oneOf,
+    'the provider transformation must not mutate the canonical schema',
+  );
+});
+
+test('Codex response schema rejects unsupported canonical union constructs', () => {
+  const envelope = JSON.parse(readFileSync('schemas/worker-agent-output-v1.json', 'utf8'));
+  const output = JSON.parse(readFileSync('schemas/worker-output-v1.json', 'utf8'));
+  const withOneOf = structuredClone(output);
+  withOneOf.properties.status = {
+    oneOf: [
+      { type: 'string', const: 'ready_for_review' },
+      { type: 'string', const: 'blocked' },
+    ],
+  };
+  assert.throws(
+    () => codexResponseSchema(envelope, withOneOf),
+    /unsupported oneOf.*only the canonical general\/inline placement union/,
+  );
+
+  const withAnyOf = structuredClone(output);
+  withAnyOf.properties.status = {
+    anyOf: [
+      { type: 'string', const: 'ready_for_review' },
+      { type: 'string', const: 'blocked' },
+    ],
+  };
+  assert.throws(() => codexResponseSchema(envelope, withAnyOf), /unsupported canonical anyOf/);
+
+  const withTypeUnion = structuredClone(output);
+  withTypeUnion.properties.status = { type: ['string', 'null'] };
+  assert.throws(
+    () => codexResponseSchema(envelope, withTypeUnion),
+    /unsupported canonical type union/,
+  );
 });
 
 test('structured Worker output is preserved as stale and rerun after a PR head change', async () => {
@@ -820,6 +998,7 @@ test('Codex roles receive full envelope schemas and publication-owned prompts', 
     const schema = JSON.parse(readFileSync(schemaPath, 'utf8'));
     assert.equal(schema.properties.schema.type, 'string');
     assertCodexRootReferences(schema);
+    assert.doesNotThrow(() => assertCodexStructuredOutputsSchema(schema));
     assert.equal(
       schema.$defs.output.properties.schema.const,
       run === worker ? 'llmchat.worker-output/v1' : 'llmchat.reviewer-output/v1',

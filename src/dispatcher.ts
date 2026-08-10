@@ -992,23 +992,248 @@ function roleCommand(value: Command | undefined, issue: number, cfg: Config): Sp
 
 type JsonSchema = Record<string, unknown>;
 
+const codexSchemaKeywords = new Set([
+  '$ref',
+  '$defs',
+  'type',
+  'properties',
+  'required',
+  'additionalProperties',
+  'items',
+  'enum',
+  'const',
+  'anyOf',
+  'description',
+  'title',
+  'minLength',
+  'maxLength',
+  'pattern',
+  'format',
+  'minimum',
+  'maximum',
+  'multipleOf',
+  'minItems',
+  'maxItems',
+]);
+
+const unsupportedCodexCompositionKeywords = [
+  'allOf',
+  'not',
+  'dependentRequired',
+  'dependentSchemas',
+  'if',
+  'then',
+  'else',
+];
+
 function schemaObject(value: unknown, label: string): JsonSchema {
   if (!value || typeof value !== 'object' || Array.isArray(value))
     throw new Error(`${label} must be a JSON Schema object`);
   return value as JsonSchema;
 }
 
-function assertCodexSchemaReferences(schema: JsonSchema): void {
+function schemaArray(value: unknown, label: string): JsonSchema[] {
+  if (
+    !Array.isArray(value) ||
+    !value.every((item) => item && typeof item === 'object' && !Array.isArray(item))
+  )
+    throw new Error(`${label} must be an array of JSON Schema objects`);
+  return value as JsonSchema[];
+}
+
+function sameStrings(actual: unknown, expected: string[]): boolean {
+  return (
+    Array.isArray(actual) &&
+    actual.length === expected.length &&
+    expected.every((value) => actual.includes(value))
+  );
+}
+
+function placementAlternatives(schema: JsonSchema, path: string): JsonSchema[] {
+  const alternatives = schemaArray(schema.oneOf, `Codex placement union at ${path}`);
+  if (alternatives.length !== 2)
+    throw new Error(
+      `unsupported oneOf at ${path}; only the canonical general/inline placement union is supported`,
+    );
+  const byKind = new Map<string, JsonSchema>();
+  for (const alternative of alternatives) {
+    if (alternative.type !== 'object' || alternative.additionalProperties !== false)
+      throw new Error(
+        `unsupported oneOf at ${path}; only the canonical general/inline placement union is supported`,
+      );
+    const properties = schemaObject(alternative.properties, `placement properties at ${path}`);
+    const kind = schemaObject(properties.kind, `placement kind at ${path}`).const;
+    if (typeof kind !== 'string' || byKind.has(kind))
+      throw new Error(
+        `unsupported oneOf at ${path}; only the canonical general/inline placement union is supported`,
+      );
+    byKind.set(kind, alternative);
+  }
+  const general = byKind.get('general');
+  const inline = byKind.get('inline');
+  if (!general || !inline)
+    throw new Error(
+      `unsupported oneOf at ${path}; only the canonical general/inline placement union is supported`,
+    );
+  const generalProperties = schemaObject(general.properties, `general placement at ${path}`);
+  const inlineProperties = schemaObject(inline.properties, `inline placement at ${path}`);
+  if (
+    !sameStrings(Object.keys(generalProperties), ['kind']) ||
+    !sameStrings(general.required, ['kind']) ||
+    !sameStrings(Object.keys(inlineProperties), [
+      'kind',
+      'path',
+      'commit',
+      'side',
+      'line',
+      'start_line',
+    ]) ||
+    !sameStrings(inline.required, ['kind', 'path', 'commit', 'side', 'line'])
+  )
+    throw new Error(
+      `unsupported oneOf at ${path}; only the canonical general/inline placement union is supported`,
+    );
+  return alternatives;
+}
+
+function nullableCodexSchema(schema: JsonSchema): JsonSchema {
+  if ('$ref' in schema || 'const' in schema) return { anyOf: [schema, { type: 'null' }] };
+  if (Array.isArray(schema.anyOf)) return { ...schema, anyOf: [...schema.anyOf, { type: 'null' }] };
+  if (typeof schema.type !== 'string')
+    throw new Error('Codex nullable schema must have a single type, reference, const, or anyOf');
+  const nullable: JsonSchema = { ...schema, type: [schema.type, 'null'] };
+  if (Array.isArray(nullable.enum) && !nullable.enum.includes(null))
+    nullable.enum = [...nullable.enum, null];
+  return nullable;
+}
+
+function codexSchemaNode(schemaValue: JsonSchema, path: string, optional = false): JsonSchema {
+  const schema = structuredClone(schemaValue);
+  delete schema.$schema;
+  delete schema.$id;
+  for (const keyword of unsupportedCodexCompositionKeywords)
+    if (keyword in schema)
+      throw new Error(`unsupported Codex Structured Outputs keyword ${keyword} at ${path}`);
+  if ('anyOf' in schema)
+    throw new Error(
+      `unsupported canonical anyOf at ${path}; Codex unions are generated only for placement and nullability`,
+    );
+  if (Array.isArray(schema.type))
+    throw new Error(
+      `unsupported canonical type union at ${path}; Codex nullability is generated from optional fields`,
+    );
+
+  let transformed: JsonSchema;
+  if ('oneOf' in schema) {
+    const alternatives = placementAlternatives(schema, path);
+    delete schema.oneOf;
+    transformed = {
+      ...schema,
+      anyOf: alternatives.map((alternative, index) =>
+        codexSchemaNode(alternative, `${path}.oneOf[${index}]`),
+      ),
+    };
+  } else if ('$ref' in schema) {
+    transformed = schema;
+  } else if (schema.type === 'object') {
+    const properties =
+      schema.properties === undefined
+        ? {}
+        : schemaObject(schema.properties, `object properties at ${path}`);
+    const propertyNames = Object.keys(properties);
+    if (schema.additionalProperties && typeof schema.additionalProperties === 'object') {
+      if (propertyNames.length || (Array.isArray(schema.required) && schema.required.length))
+        throw new Error(
+          `unsupported mixed fixed/dynamic Codex object at ${path}; use either properties or additionalProperties`,
+        );
+      const valueSchema = codexSchemaNode(
+        schemaObject(schema.additionalProperties, `map values at ${path}`),
+        `${path}.additionalProperties`,
+      );
+      const {
+        properties: ignoredProperties,
+        required: ignoredRequired,
+        additionalProperties,
+        ...rest
+      } = schema;
+      transformed = {
+        ...rest,
+        type: 'array',
+        items: {
+          type: 'object',
+          properties: { key: { type: 'string' }, value: valueSchema },
+          required: ['key', 'value'],
+          additionalProperties: false,
+        },
+      };
+    } else {
+      if (schema.additionalProperties !== false)
+        throw new Error(`Codex object at ${path} must set additionalProperties to false`);
+      const canonicalRequired = new Set(
+        Array.isArray(schema.required) ? (schema.required as string[]) : [],
+      );
+      transformed = {
+        ...schema,
+        properties: Object.fromEntries(
+          Object.entries(properties).map(([name, property]) => [
+            name,
+            codexSchemaNode(
+              schemaObject(property, `property ${path}.${name}`),
+              `${path}.properties.${name}`,
+              !canonicalRequired.has(name),
+            ),
+          ]),
+        ),
+        required: propertyNames,
+      };
+    }
+  } else if (schema.type === 'array') {
+    transformed = {
+      ...schema,
+      items: codexSchemaNode(schemaObject(schema.items, `array items at ${path}`), `${path}.items`),
+    };
+  } else {
+    transformed = schema;
+  }
+
+  if (transformed.$defs !== undefined) {
+    const definitions = schemaObject(transformed.$defs, `definitions at ${path}`);
+    transformed.$defs = Object.fromEntries(
+      Object.entries(definitions).map(([name, definition]) => [
+        name,
+        codexSchemaNode(schemaObject(definition, `definition ${name}`), `${path}.$defs.${name}`),
+      ]),
+    );
+  }
+  return optional ? nullableCodexSchema(transformed) : transformed;
+}
+
+export function assertCodexStructuredOutputsSchema(schema: JsonSchema): void {
   const definitions = schemaObject(schema.$defs, 'Codex response schema $defs');
-  const visit = (value: unknown, path: string, root = false): void => {
+  const visit = (value: unknown, path: string, rootNode = false): void => {
     if (Array.isArray(value)) {
       value.forEach((item, index) => visit(item, `${path}[${index}]`));
       return;
     }
     if (!value || typeof value !== 'object') return;
     const object = value as JsonSchema;
-    if (!root && '$defs' in object)
+    for (const key of Object.keys(object))
+      if (!codexSchemaKeywords.has(key))
+        throw new Error(`unsupported Codex Structured Outputs keyword ${key} at ${path}`);
+    if (!rootNode && '$defs' in object)
       throw new Error(`Codex response schema definitions must be top-level; found ${path}.$defs`);
+    if ('oneOf' in object)
+      throw new Error(`unsupported Codex Structured Outputs keyword oneOf at ${path}`);
+    if (rootNode && (object.type !== 'object' || 'anyOf' in object))
+      throw new Error('Codex response schema root must be an object and cannot be a union');
+    if (Array.isArray(object.type)) {
+      if (
+        object.type.length !== 2 ||
+        !object.type.includes('null') ||
+        object.type.filter((type) => type !== 'null').length !== 1
+      )
+        throw new Error(`unsupported Codex type union at ${path}`);
+    }
     if ('$ref' in object) {
       if (typeof object.$ref !== 'string')
         throw new Error(`Codex response schema reference at ${path} must be a string`);
@@ -1018,7 +1243,31 @@ function assertCodexSchemaReferences(schema: JsonSchema): void {
           `Codex response schema reference at ${path} must point to a top-level definition`,
         );
     }
-    for (const [key, child] of Object.entries(object)) visit(child, `${path}.${key}`);
+    const types = Array.isArray(object.type) ? object.type : [object.type];
+    if (types.includes('object')) {
+      const properties = schemaObject(object.properties, `Codex object properties at ${path}`);
+      if (object.additionalProperties !== false)
+        throw new Error(`Codex object at ${path} must set additionalProperties to false`);
+      if (!sameStrings(object.required, Object.keys(properties)))
+        throw new Error(`Codex object at ${path} must require every property`);
+    }
+    if (Array.isArray(object.enum) && types.includes('null') && !object.enum.includes(null))
+      throw new Error(`Codex nullable enum at ${path} must include null`);
+    if (object.$defs)
+      for (const [name, definition] of Object.entries(
+        schemaObject(object.$defs, `Codex definitions at ${path}`),
+      ))
+        visit(definition, `${path}.$defs.${name}`);
+    if (object.properties)
+      for (const [name, property] of Object.entries(
+        schemaObject(object.properties, `Codex properties at ${path}`),
+      ))
+        visit(property, `${path}.properties.${name}`);
+    if (object.items) visit(object.items, `${path}.items`);
+    if (object.anyOf)
+      schemaArray(object.anyOf, `Codex anyOf at ${path}`).forEach((alternative, index) =>
+        visit(alternative, `${path}.anyOf[${index}]`),
+      );
   };
   visit(schema, '$', true);
 }
@@ -1044,8 +1293,102 @@ export function codexResponseSchema(
     throw new Error('agent envelope top-level definition "output" is reserved');
   envelope.$defs = { ...existingDefinitions, output: definition };
   properties.output = { $ref: '#/$defs/output' };
-  assertCodexSchemaReferences(envelope);
-  return envelope;
+  const transformed = codexSchemaNode(envelope, '$');
+  assertCodexStructuredOutputsSchema(transformed);
+  return transformed;
+}
+
+function loadRoleSchema(name: string): JsonSchema {
+  return schemaObject(JSON.parse(readFileSync(join(root, 'schemas', name), 'utf8')), name);
+}
+
+function canonicalCodexValue(
+  value: unknown,
+  schema: JsonSchema,
+  references: Map<string, JsonSchema>,
+  path = '$',
+): unknown {
+  if (typeof schema.$ref === 'string') {
+    const referenced = references.get(schema.$ref);
+    if (!referenced) throw new Error(`unknown canonical Codex transport reference at ${path}`);
+    return canonicalCodexValue(value, referenced, references, path);
+  }
+  if ('oneOf' in schema) {
+    const alternatives = placementAlternatives(schema, path);
+    if (value && typeof value === 'object' && !Array.isArray(value)) {
+      const kind = (value as Record<string, unknown>).kind;
+      const matching = alternatives.find((alternative) => {
+        const properties = schemaObject(alternative.properties, `placement properties at ${path}`);
+        return schemaObject(properties.kind, `placement kind at ${path}`).const === kind;
+      });
+      if (matching) return canonicalCodexValue(value, matching, references, path);
+    }
+    return value;
+  }
+  if (schema.type === 'object') {
+    const properties =
+      schema.properties === undefined
+        ? {}
+        : schemaObject(schema.properties, `canonical properties at ${path}`);
+    if (schema.additionalProperties && typeof schema.additionalProperties === 'object') {
+      if (!Array.isArray(value)) return value;
+      const decoded: Record<string, unknown> = Object.create(null) as Record<string, unknown>;
+      const keys = new Set<string>();
+      value.forEach((entry, index) => {
+        if (!entry || typeof entry !== 'object' || Array.isArray(entry))
+          throw new Error(`invalid Codex map entry at ${path}[${index}]`);
+        const record = entry as Record<string, unknown>;
+        if (
+          Object.keys(record).length !== 2 ||
+          !('key' in record) ||
+          !('value' in record) ||
+          typeof record.key !== 'string'
+        )
+          throw new Error(`invalid Codex map entry at ${path}[${index}]`);
+        if (keys.has(record.key))
+          throw new Error(`duplicate Codex map key at ${path}[${index}].key`);
+        keys.add(record.key);
+        decoded[record.key] = canonicalCodexValue(
+          record.value,
+          schemaObject(schema.additionalProperties, `canonical map values at ${path}`),
+          references,
+          `${path}.${record.key}`,
+        );
+      });
+      return decoded;
+    }
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return value;
+    const decoded = { ...(value as Record<string, unknown>) };
+    const required = new Set(Array.isArray(schema.required) ? (schema.required as string[]) : []);
+    for (const [name, property] of Object.entries(properties)) {
+      if (!(name in decoded)) continue;
+      if (decoded[name] === null && !required.has(name)) delete decoded[name];
+      else
+        decoded[name] = canonicalCodexValue(
+          decoded[name],
+          schemaObject(property, `canonical property ${path}.${name}`),
+          references,
+          `${path}.${name}`,
+        );
+    }
+    return decoded;
+  }
+  if (schema.type === 'array' && Array.isArray(value) && schema.items) {
+    const items = schemaObject(schema.items, `canonical array items at ${path}`);
+    return value.map((item, index) =>
+      canonicalCodexValue(item, items, references, `${path}[${index}]`),
+    );
+  }
+  return value;
+}
+
+function canonicalCodexResponse(value: unknown, role: 'worker' | 'qa' | 'staff'): unknown {
+  const prefix = role === 'worker' ? 'worker' : 'reviewer';
+  const envelope = loadRoleSchema(`${prefix}-agent-output-v1.json`);
+  const output = loadRoleSchema(`${prefix}-output-v1.json`);
+  const outputId = output.$id;
+  if (typeof outputId !== 'string') throw new Error(`${prefix} output schema must have an $id`);
+  return canonicalCodexValue(value, envelope, new Map([[outputId, output]]));
 }
 
 function structuredRoleSpec(spec: Spec, role: 'worker' | 'qa' | 'staff', runId: string): Spec {
@@ -1058,14 +1401,12 @@ function structuredRoleSpec(spec: Spec, role: 'worker' | 'qa' | 'staff', runId: 
   const schema = join(runDir, `${role}-response-schema.json`);
   if (!has('--output-schema')) {
     const rolePrefix = role === 'worker' ? 'worker' : 'reviewer';
-    const loadSchema = (name: string): JsonSchema =>
-      schemaObject(JSON.parse(readFileSync(join(root, 'schemas', name), 'utf8')), name);
     writeFileSync(
       schema,
       `${JSON.stringify(
         codexResponseSchema(
-          loadSchema(`${rolePrefix}-agent-output-v1.json`),
-          loadSchema(`${rolePrefix}-output-v1.json`),
+          loadRoleSchema(`${rolePrefix}-agent-output-v1.json`),
+          loadRoleSchema(`${rolePrefix}-output-v1.json`),
         ),
         null,
         2,
@@ -1097,7 +1438,7 @@ function readStructuredOutput(
   } catch {
     return parseDelimitedEnvelope(raw, { ...context, role });
   }
-  return validateEnvelope(value, { ...context, role });
+  return validateEnvelope(canonicalCodexResponse(value, role), { ...context, role });
 }
 
 function findingState(state: State, role?: 'worker' | 'qa' | 'staff'): EnvelopeValidationContext {
