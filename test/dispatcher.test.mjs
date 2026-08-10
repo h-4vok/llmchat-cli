@@ -17,6 +17,7 @@ import {
   acquire,
   childProcessInvocation,
   command,
+  codexResponseSchema,
   dispatcherLockPath,
   dispatch,
   githubReactionRequest,
@@ -33,6 +34,24 @@ import {
   resetRunState,
   runCommand,
 } from '../dist/dispatcher.js';
+
+function assertCodexRootReferences(schema) {
+  assert.ok(schema.$defs?.output);
+  const visit = (value, path = '$', root = true) => {
+    if (Array.isArray(value)) {
+      value.forEach((item, index) => visit(item, `${path}[${index}]`, false));
+      return;
+    }
+    if (!value || typeof value !== 'object') return;
+    if (!root) assert.equal(value.$defs, undefined, `nested definitions at ${path}`);
+    if ('$ref' in value) {
+      assert.match(value.$ref, /^#\/\$defs\/[^/]+$/, `invalid reference at ${path}`);
+      assert.ok(value.$ref.slice('#/$defs/'.length) in schema.$defs);
+    }
+    for (const [key, child] of Object.entries(value)) visit(child, `${path}.${key}`, false);
+  };
+  visit(schema);
+}
 
 test('production GitHub publication adapters target replies, thread resolution, and reactions', () => {
   assert.deepEqual(githubReplyRequest('owner/repo', 50, '123', 'reply'), [
@@ -673,6 +692,7 @@ test('dispatcher accepts a Codex output file produced with its checked-in schema
       const schemaPath = spec.args[spec.args.indexOf('--output-schema') + 1];
       const schema = JSON.parse(readFileSync(schemaPath, 'utf8'));
       assert.equal(schema.properties.schema.type, 'string');
+      assertCodexRootReferences(schema);
       const outputPath = spec.args[spec.args.indexOf('--output-last-message') + 1];
       writeFileSync(
         outputPath,
@@ -719,6 +739,21 @@ test('dispatcher accepts a Codex output file produced with its checked-in schema
       ).length,
     1,
   );
+});
+
+test('Codex response schemas hoist the exact nested external output reference', () => {
+  for (const role of ['worker', 'reviewer']) {
+    const envelope = JSON.parse(readFileSync(`schemas/${role}-agent-output-v1.json`, 'utf8'));
+    const output = JSON.parse(readFileSync(`schemas/${role}-output-v1.json`, 'utf8'));
+
+    assert.deepEqual(envelope.properties.output, { $ref: output.$id });
+    const schema = codexResponseSchema(envelope, output);
+
+    assert.deepEqual(schema.properties.output, { $ref: '#/$defs/output' });
+    assertCodexRootReferences(schema);
+    const { $schema: ignoredSchema, $id: ignoredId, ...payloadContract } = output;
+    assert.deepEqual(schema.$defs.output, payloadContract);
+  }
 });
 
 test('structured Worker output is preserved as stale and rerun after a PR head change', async () => {
@@ -777,13 +812,18 @@ test('Codex roles receive full envelope schemas and publication-owned prompts', 
   const worker = h.runs.find((run) => run.input?.includes('Use the worker skill'));
   const qa = h.runs.find((run) => run.input?.includes('Use the qa-sdet skill'));
   const staff = h.runs.find((run) => run.input?.includes('Use the staff-reviewer skill'));
-  assert.match(worker.args.join(' '), /worker-agent-output-v1\.json/);
-  assert.match(qa.args.join(' '), /reviewer-agent-output-v1\.json/);
-  assert.match(staff.args.join(' '), /reviewer-agent-output-v1\.json/);
+  assert.match(worker.args.join(' '), /worker-response-schema\.json/);
+  assert.match(qa.args.join(' '), /qa-response-schema\.json/);
+  assert.match(staff.args.join(' '), /staff-response-schema\.json/);
   for (const run of [worker, qa, staff]) {
     const schemaPath = run.args[run.args.indexOf('--output-schema') + 1];
     const schema = JSON.parse(readFileSync(schemaPath, 'utf8'));
     assert.equal(schema.properties.schema.type, 'string');
+    assertCodexRootReferences(schema);
+    assert.equal(
+      schema.$defs.output.properties.schema.const,
+      run === worker ? 'llmchat.worker-output/v1' : 'llmchat.reviewer-output/v1',
+    );
     assert.match(run.input, /return exactly one llmchat\.agent-output\/v1 envelope/i);
     assert.match(run.input, /Do not publish directly to GitHub|Do not publish GitHub/);
   }

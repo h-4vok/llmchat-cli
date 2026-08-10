@@ -990,18 +990,88 @@ function roleCommand(value: Command | undefined, issue: number, cfg: Config): Sp
   return { ...spec, logInvocation: cfg.logRoleInvocation !== false };
 }
 
+type JsonSchema = Record<string, unknown>;
+
+function schemaObject(value: unknown, label: string): JsonSchema {
+  if (!value || typeof value !== 'object' || Array.isArray(value))
+    throw new Error(`${label} must be a JSON Schema object`);
+  return value as JsonSchema;
+}
+
+function assertCodexSchemaReferences(schema: JsonSchema): void {
+  const definitions = schemaObject(schema.$defs, 'Codex response schema $defs');
+  const visit = (value: unknown, path: string, root = false): void => {
+    if (Array.isArray(value)) {
+      value.forEach((item, index) => visit(item, `${path}[${index}]`));
+      return;
+    }
+    if (!value || typeof value !== 'object') return;
+    const object = value as JsonSchema;
+    if (!root && '$defs' in object)
+      throw new Error(`Codex response schema definitions must be top-level; found ${path}.$defs`);
+    if ('$ref' in object) {
+      if (typeof object.$ref !== 'string')
+        throw new Error(`Codex response schema reference at ${path} must be a string`);
+      const match = object.$ref.match(/^#\/\$defs\/([^/]+)$/);
+      if (!match || !(match[1] in definitions))
+        throw new Error(
+          `Codex response schema reference at ${path} must point to a top-level definition`,
+        );
+    }
+    for (const [key, child] of Object.entries(object)) visit(child, `${path}.${key}`);
+  };
+  visit(schema, '$', true);
+}
+
+export function codexResponseSchema(
+  envelopeSchema: JsonSchema,
+  outputSchema: JsonSchema,
+): JsonSchema {
+  const envelope = structuredClone(envelopeSchema);
+  const properties = schemaObject(envelope.properties, 'agent envelope properties');
+  const output = schemaObject(properties.output, 'agent envelope output');
+  const outputId = outputSchema.$id;
+  if (typeof outputId !== 'string' || output.$ref !== outputId)
+    throw new Error('agent envelope output reference must match the payload schema $id');
+  const definition = structuredClone(outputSchema);
+  delete definition.$schema;
+  delete definition.$id;
+  const existingDefinitions =
+    envelope.$defs === undefined
+      ? {}
+      : schemaObject(envelope.$defs, 'agent envelope top-level definitions');
+  if ('output' in existingDefinitions)
+    throw new Error('agent envelope top-level definition "output" is reserved');
+  envelope.$defs = { ...existingDefinitions, output: definition };
+  properties.output = { $ref: '#/$defs/output' };
+  assertCodexSchemaReferences(envelope);
+  return envelope;
+}
+
 function structuredRoleSpec(spec: Spec, role: 'worker' | 'qa' | 'staff', runId: string): Spec {
   if (!/^(?:.*[\\/])?codex(?:\.cmd|\.exe)?$/i.test(spec.command) || spec.args[0] !== 'exec')
     return spec;
   const runDir = join(root, '.llmchat', 'runs', runId);
   mkdirSync(runDir, { recursive: true });
-  const schema = join(
-    root,
-    'schemas',
-    role === 'worker' ? 'worker-agent-output-v1.json' : 'reviewer-agent-output-v1.json',
-  );
   const lastMessage = join(runDir, `${role}.json`);
   const has = (flag: string) => spec.args.includes(flag);
+  const schema = join(runDir, `${role}-response-schema.json`);
+  if (!has('--output-schema')) {
+    const rolePrefix = role === 'worker' ? 'worker' : 'reviewer';
+    const loadSchema = (name: string): JsonSchema =>
+      schemaObject(JSON.parse(readFileSync(join(root, 'schemas', name), 'utf8')), name);
+    writeFileSync(
+      schema,
+      `${JSON.stringify(
+        codexResponseSchema(
+          loadSchema(`${rolePrefix}-agent-output-v1.json`),
+          loadSchema(`${rolePrefix}-output-v1.json`),
+        ),
+        null,
+        2,
+      )}\n`,
+    );
+  }
   const structuredFlags = [
     ...(has('--output-schema') ? [] : ['--output-schema', schema]),
     ...(has('--output-last-message') ? [] : ['--output-last-message', lastMessage]),
