@@ -13,6 +13,7 @@ import { tmpdir } from 'node:os';
 import { delimiter, join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { test } from 'node:test';
+import { buildDiffIndex, publishArtifact } from '../dist/review-publication.js';
 import {
   acquire,
   childProcessInvocation,
@@ -350,12 +351,14 @@ function harness(
     mergeStateStatus: 'CLEAN',
     mergeable: 'MERGEABLE',
     comments: [],
+    reviewComments: structuredClone(overrides.initialReviewComments ?? []),
     reviews,
     statusCheckRollup: [{ name: 'pr-checks', status: 'COMPLETED', conclusion: 'SUCCESS' }],
   };
   let workerCount = 0;
   let qaCount = 0;
   let staffCount = 0;
+  let inlineCommentCount = 0;
   const qaVerdicts = overrides.qaVerdicts ?? ['passed'];
   const staffVerdicts = overrides.staffVerdicts ?? ['approved'];
   const qaBodies = overrides.qaBodies;
@@ -427,6 +430,7 @@ function harness(
             round,
             commit: pr.headRefOid,
             count: qaCount,
+            pr,
           });
         const verdict = qaVerdicts[qaCount - 1] ?? qaVerdicts.at(-1);
         if (publishEvidence.qa)
@@ -448,6 +452,7 @@ function harness(
             round,
             commit: pr.headRefOid,
             count: staffCount,
+            pr,
           });
         const verdict = staffVerdicts[staffCount - 1] ?? staffVerdicts.at(-1);
         if (publishEvidence.staff)
@@ -478,6 +483,20 @@ function harness(
       pr.comments.push({ body, createdAt: `dispatcher-${pr.comments.length}` });
       return `comment-${pr.comments.length}`;
     },
+    prInlineComment: async (number, body, payload) => {
+      assert.equal(number, pr.number);
+      inlineCommentCount += 1;
+      const id = `inline-comment-${pr.reviewComments.length + 1}`;
+      pr.reviewComments.push({
+        id,
+        body,
+        source: 'review',
+        createdAt: `dispatcher-inline-${pr.reviewComments.length}`,
+        url: `https://example.test/pull/${number}#discussion_r${id}`,
+        path: payload.path,
+      });
+      return id;
+    },
     prReact: async (number, commentId, source, reaction) => {
       reactions.push({ number, commentId, source, reaction });
       overrides.onReact?.({ number, commentId, source, reaction });
@@ -506,6 +525,7 @@ function harness(
       state = next;
     },
     counts: () => ({ workerCount, qaCount, staffCount }),
+    inlineCommentCount: () => inlineCommentCount,
     prBodyUpdates,
     createdPrBodies,
     cfg: { ...baseConfig, ...overrides.config },
@@ -805,6 +825,109 @@ test('valid structured Worker output is dispatcher-published without role-author
     .comments.filter((comment) => comment.body?.startsWith('[Worker]'));
   assert.equal(workerComments.length, 1);
   assert.match(workerComments[0].body, /llmchat-worker-publish:v1/);
+  assert.equal(h.state().status, 'ready_for_human_merge');
+});
+
+test('pending inline publication reconciles after a crash without a duplicate write', async () => {
+  const commit = '0123456789abcdef0123456789abcdef01234567';
+  const note = {
+    schema: 'review.note/v1',
+    body: 'The inline write completed before the dispatcher recorded publication.',
+    placement: {
+      kind: 'inline',
+      path: 'src/dispatcher.ts',
+      commit,
+      side: 'RIGHT',
+      line: 42,
+    },
+  };
+  let publication;
+  const h = harness([{ number: 1, title: 'a' }], {
+    headRefOid: commit,
+    initialState: {
+      issue: 1,
+      pr: 14,
+      branch: 'codex/issue-1',
+      headSha: commit,
+      status: 'worker_recovery_pending',
+      reviewRound: 1,
+    },
+    reviewDiff: () => [{ path: 'src/dispatcher.ts', side: 'RIGHT', line: 42 }],
+    structuredWorkerOutput: ({ spec, commit: workerCommit }) =>
+      readyWorkerEnvelope(spec, workerCommit, 'worker-after-inline-publication-crash'),
+    structuredReviewerOutput: ({ spec, role, round, pr }) => {
+      const context = dispatcherContext(spec);
+      if (role === 'qa') {
+        publication = publishArtifact(
+          note,
+          { runId: context.run_id, role, round, commit },
+          buildDiffIndex([{ path: 'src/dispatcher.ts', side: 'RIGHT', line: 42 }]),
+        );
+        pr.reviewComments.push({
+          id: 'already-written-inline-comment',
+          body: publication.body,
+          source: 'review',
+          url: 'https://example.test/pull/14#discussion_ralready-written-inline-comment',
+        });
+        h.setState({
+          ...h.state(),
+          publicationLedger: {
+            ...(h.state().publicationLedger ?? {}),
+            [publication.key]: {
+              key: publication.key,
+              status: 'pending',
+              marker: publication.body.split('\n')[0],
+              intended_action: 'inline',
+            },
+          },
+        });
+      }
+      return `<<<llmchat.agent-output/v1>>>\n${JSON.stringify({
+        schema: 'llmchat.agent-output/v1',
+        message_id: `${role}-after-inline-publication-crash`,
+        producer: { role },
+        context,
+        output: {
+          schema: 'llmchat.reviewer-output/v1',
+          result: 'accepted',
+          summary: `${role} accepted crash recovery.`,
+          evidence: ['The pending publication marker was reconciled deterministically.'],
+          artifacts: role === 'qa' ? [note] : [],
+          dispositions: {},
+        },
+      })}\n<<<end llmchat.agent-output/v1>>>`;
+    },
+  });
+  h.deps.checkoutWorkerBranch = () => {};
+
+  await dispatch(h.cfg, h.deps);
+
+  assert.ok(publication);
+  assert.ok(
+    h.saves.some((state) => state.publicationLedger?.[publication.key]?.status === 'pending'),
+  );
+  assert.equal(h.inlineCommentCount(), 0);
+  assert.equal(h.deps.pullRequest(14).reviewComments.length, 1);
+  assert.equal(
+    h.deps
+      .pullRequest(14)
+      .comments.filter((comment) => comment.body?.includes(publication.body.split('\n')[0])).length,
+    0,
+  );
+  assert.deepEqual(
+    {
+      status: h.state().publicationLedger[publication.key].status,
+      remote_id: h.state().publicationLedger[publication.key].remote_id,
+      url: h.state().publicationLedger[publication.key].url,
+      remote_source: h.state().publicationLedger[publication.key].remote_source,
+    },
+    {
+      status: 'published',
+      remote_id: 'already-written-inline-comment',
+      url: 'https://example.test/pull/14#discussion_ralready-written-inline-comment',
+      remote_source: 'review',
+    },
+  );
   assert.equal(h.state().status, 'ready_for_human_merge');
 });
 

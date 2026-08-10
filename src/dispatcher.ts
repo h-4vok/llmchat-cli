@@ -117,6 +117,17 @@ export type Review = {
   state?: string;
 };
 
+type PullRequestComment = {
+  id?: string;
+  body?: string;
+  source?: 'pull_request' | 'issue' | 'review' | 'thread';
+  inReplyToId?: string;
+  createdAt?: string;
+  updatedAt?: string;
+  url?: string;
+  author?: string;
+};
+
 export type PullRequest = {
   number: number;
   state?: string;
@@ -127,16 +138,8 @@ export type PullRequest = {
   mergeStateStatus?: string;
   mergeable?: string;
   reviews?: Review[];
-  comments?: Array<{
-    id?: string;
-    body?: string;
-    source?: 'pull_request' | 'issue' | 'review' | 'thread';
-    inReplyToId?: string;
-    createdAt?: string;
-    updatedAt?: string;
-    url?: string;
-    author?: string;
-  }>;
+  comments?: PullRequestComment[];
+  reviewComments?: PullRequestComment[];
   statusCheckRollup?: Check[];
 };
 
@@ -435,6 +438,16 @@ function pullRequest(pr: number): PullRequest {
   ]);
   const issueComments = issueCommentPages.flat();
   const reviewComments = reviewCommentPages.flat();
+  const normalizeComment = (comment: any): PullRequestComment => ({
+    id: comment.id ? String(comment.id) : undefined,
+    body: comment.body,
+    source: comment.source,
+    inReplyToId: comment.in_reply_to_id ? String(comment.in_reply_to_id) : undefined,
+    createdAt: comment.createdAt ?? comment.created_at,
+    updatedAt: comment.updatedAt ?? comment.updated_at,
+    url: comment.url ?? comment.html_url,
+    author: comment.author?.login ?? comment.user?.login,
+  });
   const conversation = [
     ...(raw.comments ?? []).map((comment: any) => ({ ...comment, source: 'issue' })),
     ...issueComments.map((comment: any) => ({ ...comment, source: 'issue' })),
@@ -461,22 +474,17 @@ function pullRequest(pr: number): PullRequest {
       updatedAt: review.updatedAt ?? review.updated_at,
       commitId: review.commit?.oid ?? review.commitId ?? review.commit_id,
     })),
-    comments: conversation
-      .map((comment: any) => ({
-        id: comment.id ? String(comment.id) : undefined,
-        body: comment.body,
-        source: comment.source,
-        inReplyToId: comment.in_reply_to_id ? String(comment.in_reply_to_id) : undefined,
-        createdAt: comment.createdAt ?? comment.created_at,
-        updatedAt: comment.updatedAt ?? comment.updated_at,
-        url: comment.url ?? comment.html_url,
-        author: comment.author?.login ?? comment.user?.login,
-      }))
-      .filter((comment: { id?: string }) => {
-        if (!comment.id || seen.has(comment.id)) return false;
-        seen.add(comment.id);
-        return true;
+    reviewComments: reviewComments.map((comment: any) =>
+      normalizeComment({
+        ...comment,
+        source: comment.in_reply_to_id ? 'thread' : 'review',
       }),
+    ),
+    comments: conversation.map(normalizeComment).filter((comment: { id?: string }) => {
+      if (!comment.id || seen.has(comment.id)) return false;
+      seen.add(comment.id);
+      return true;
+    }),
     statusCheckRollup: (raw.statusCheckRollup ?? []).map((check: any) => ({
       name: check.name ?? check.context ?? check.workflowName ?? '',
       status: check.status ?? check.state,
@@ -1729,6 +1737,24 @@ function workerMetadata(output: string, knownPr?: number): { pr?: number; base?:
 
 const publicationMarker = '<!-- llmchat-review-publish:v1';
 const workerPublicationMarker = '<!-- llmchat-worker-publish:v1';
+
+function publishedReviewArtifact(
+  pr: PullRequest | undefined,
+  marker: string,
+  intendedAction: 'general' | 'inline',
+): PullRequestComment | undefined {
+  if (!pr) return undefined;
+  if (intendedAction === 'general')
+    return pr.comments?.find((comment) => comment.body?.includes(marker));
+  const inlineComments = [
+    ...(pr.reviewComments ?? []),
+    ...(pr.comments ?? []).filter(
+      (comment) => comment.source === 'review' || comment.source === 'thread',
+    ),
+  ];
+  return inlineComments.find((comment) => comment.body?.includes(marker));
+}
+
 function humanFeedbackCursor(state: State): string {
   const items = Object.values(state.humanFeedback ?? {})
     .map((item: any) => `${item.id}:${item.context_cursor ?? ''}:${item.status ?? ''}`)
@@ -2657,6 +2683,10 @@ async function runReview(
         existing?.status === 'resolved'
       )
         return;
+      const reconciliationPlacement =
+        existing?.status === 'pending' && existing?.intended_action === 'inline'
+          ? 'inline'
+          : publication.kind;
       ledger[publication.key] = {
         ...(existing ?? {}),
         key: publication.key,
@@ -2678,11 +2708,17 @@ async function runReview(
       };
       d.save({ ...d.load(), publicationLedger: ledger });
       const current = d.pullRequest ? await d.pullRequest(prNumber) : undefined;
-      if (
-        current?.comments?.some((comment) =>
-          comment.body?.includes(publication.body.split('\n')[0]),
-        )
-      ) {
+      const reconciled = publishedReviewArtifact(
+        current,
+        publication.body.split('\n')[0],
+        reconciliationPlacement,
+      );
+      if (reconciled) {
+        if (reconciled.id) ledger[publication.key].remote_id = reconciled.id;
+        if (reconciled.url) ledger[publication.key].url = reconciled.url;
+        if (reconciled.source) ledger[publication.key].remote_source = reconciled.source;
+        if (reconciled.inReplyToId)
+          ledger[publication.key].remote_in_reply_to_id = reconciled.inReplyToId;
         ledger[publication.key].status = publication.fallbackReason ? 'fallback' : 'published';
         d.save({ ...d.load(), publicationLedger: ledger });
         return;
