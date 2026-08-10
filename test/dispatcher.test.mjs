@@ -102,6 +102,39 @@ function dispatcherContext(spec) {
   return promptContext;
 }
 
+function reviewerLifecycleContext(spec) {
+  const match = spec.input?.match(
+    /Dispatcher-issued reviewer lifecycle context \([^\n]+\):\n(\{[^\n]+\})\n/,
+  );
+  assert.ok(match, 'reviewer prompt must contain dispatcher-issued lifecycle JSON');
+  const promptContext = JSON.parse(match[1]);
+  assert.deepEqual(JSON.parse(spec.env?.LLMCHAT_REVIEWER_CONTEXT), promptContext);
+  return promptContext;
+}
+
+function readyWorkerEnvelope(spec, commit, messageId) {
+  return `<<<llmchat.agent-output/v1>>>\n${JSON.stringify({
+    schema: 'llmchat.agent-output/v1',
+    message_id: messageId,
+    producer: { role: 'worker' },
+    context: { ...dispatcherContext(spec), pr: 14, commit },
+    output: {
+      schema: 'llmchat.worker-output/v1',
+      status: 'ready_for_review',
+      resolutions: [],
+      evidence: ['Prepared the deterministic reviewer lifecycle fixture.'],
+      human_verification: {
+        summary: 'Verify reviewer lifecycle disposition routing.',
+        steps: ['Run the focused dispatcher regression.'],
+        expected: ['Only current owned structured findings are supplied.'],
+        isolation: 'Use the credential-free dispatcher harness.',
+        limitations: ['No live GitHub process is invoked.'],
+        checklist: ['Confirm required dispositions gate reviewer acceptance.'],
+      },
+    },
+  })}\n<<<end llmchat.agent-output/v1>>>`;
+}
+
 function roleOfRun(spec) {
   if (spec.input?.includes('Use the worker skill')) return 'worker';
   if (spec.input?.includes('Use the qa-sdet skill')) return 'qa';
@@ -312,7 +345,7 @@ function harness(
     state: 'OPEN',
     baseRefName: 'staging',
     headRefName: overrides.headRefName ?? 'codex/issue-1',
-    headRefOid: 'abc0',
+    headRefOid: overrides.headRefOid ?? 'abc0',
     body: overrides.prBody ?? 'Summary',
     mergeStateStatus: 'CLEAN',
     mergeable: 'MERGEABLE',
@@ -899,8 +932,32 @@ test('Worker context separates legacy review IDs while preserving resolvable v1 
         },
       })}\n<<<end llmchat.agent-output/v1>>>`;
     },
-    structuredReviewerOutput: ({ spec, role }) =>
-      `<<<llmchat.agent-output/v1>>>\n${JSON.stringify({
+    structuredReviewerOutput: ({ spec, role }) => {
+      const lifecycle = reviewerLifecycleContext(spec);
+      assert.deepEqual(
+        lifecycle,
+        role === 'qa'
+          ? {
+              open_owned_findings: [
+                { id: 'Q1', body: 'Fix the current structured boundary regression.' },
+              ],
+              open_human_feedback_ids: [],
+            }
+          : {
+              open_owned_findings: [
+                { id: 'S2', body: 'Preserve the current structured lifecycle routing.' },
+              ],
+              open_human_feedback_ids: ['H1'],
+            },
+      );
+      assert.doesNotMatch(spec.input, /open_owned_findings[^\n]*S1/);
+      const schemaPath = spec.args[spec.args.indexOf('--output-schema') + 1];
+      const schema = JSON.parse(readFileSync(schemaPath, 'utf8'));
+      assert.deepEqual(
+        schema.$defs.output.properties.dispositions.required,
+        role === 'qa' ? ['Q1'] : ['S2', 'H1'],
+      );
+      return `<<<llmchat.agent-output/v1>>>\n${JSON.stringify({
         schema: 'llmchat.agent-output/v1',
         message_id: `${role}-resolves-current-context`,
         producer: { role },
@@ -913,7 +970,8 @@ test('Worker context separates legacy review IDs while preserving resolvable v1 
           artifacts: [],
           dispositions: role === 'qa' ? { Q1: 'resolve' } : { S2: 'resolve', H1: 'resolve' },
         },
-      })}\n<<<end llmchat.agent-output/v1>>>`,
+      })}\n<<<end llmchat.agent-output/v1>>>`;
+    },
   });
   h.deps.checkoutWorkerBranch = () => {};
 
@@ -935,6 +993,194 @@ test('Worker context separates legacy review IDs while preserving resolvable v1 
   assert.equal(h.state().publicationLedger['staff-current-s2:S2'].status, 'resolved');
   assert.equal(h.state().humanFeedback.H1.status, 'resolved');
   assert.equal(h.state().status, 'ready_for_human_merge');
+});
+
+test('QA receives only current owned Q findings and resolves each required disposition', async () => {
+  const commit = '0123456789abcdef0123456789abcdef01234567';
+  const currentFinding = {
+    schema: 'llmchat.agent-output/v1',
+    message_id: 'qa-current-q1-lifecycle',
+    producer: { role: 'qa' },
+    context: {
+      run_id: 'reviewer-lifecycle-run',
+      issue: 1,
+      pr: 14,
+      round: 1,
+      commit,
+      feedback_cursor: 'prior-cursor',
+    },
+    output: {
+      schema: 'llmchat.reviewer-output/v1',
+      result: 'changes_requested',
+      summary: 'Current structured QA finding.',
+      evidence: ['Deterministic lifecycle fixture.'],
+      artifacts: [
+        {
+          schema: 'review.finding/v1',
+          id: 'Q1',
+          body: 'Resolve the current QA lifecycle finding.',
+          placement: { kind: 'general' },
+        },
+      ],
+      dispositions: {},
+    },
+  };
+  const unrelatedDisposition = {
+    ...currentFinding,
+    message_id: 'qa-unrelated-disposition-only',
+    output: {
+      ...currentFinding.output,
+      summary: 'Historical disposition-only state must not allocate a finding.',
+      artifacts: [],
+      dispositions: { Q99: 'continue' },
+    },
+  };
+  const h = harness([{ number: 1, title: 'a' }], {
+    headRefOid: commit,
+    initialState: {
+      issue: 1,
+      pr: 14,
+      branch: 'codex/issue-1',
+      headSha: commit,
+      workerRunId: 'reviewer-lifecycle-run',
+      status: 'worker_recovery_pending',
+      reviewRound: 2,
+      lastQaFeedback: '[QA/SDET Review] round=1 verdict=changes_requested\n- [Q88] legacy only',
+      agentEnvelopes: {
+        [currentFinding.message_id]: currentFinding,
+        [unrelatedDisposition.message_id]: unrelatedDisposition,
+      },
+    },
+    structuredWorkerOutput: ({ spec, commit: workerCommit }) =>
+      readyWorkerEnvelope(spec, workerCommit, 'worker-before-qa-lifecycle-resolution'),
+    structuredReviewerOutput: ({ spec, role }) => {
+      const lifecycle = reviewerLifecycleContext(spec);
+      const schemaPath = spec.args[spec.args.indexOf('--output-schema') + 1];
+      const schema = JSON.parse(readFileSync(schemaPath, 'utf8'));
+      if (role === 'qa') {
+        assert.deepEqual(lifecycle, {
+          open_owned_findings: [{ id: 'Q1', body: 'Resolve the current QA lifecycle finding.' }],
+          open_human_feedback_ids: [],
+        });
+        assert.deepEqual(schema.$defs.output.properties.dispositions, {
+          type: 'object',
+          description: 'Emit exactly one disposition for each currently open owned item: Q1.',
+          properties: {
+            Q1: { type: 'string', enum: ['continue', 'resolve'] },
+          },
+          required: ['Q1'],
+          additionalProperties: false,
+        });
+      } else {
+        assert.deepEqual(lifecycle, {
+          open_owned_findings: [],
+          open_human_feedback_ids: [],
+        });
+      }
+      return `<<<llmchat.agent-output/v1>>>\n${JSON.stringify({
+        schema: 'llmchat.agent-output/v1',
+        message_id: `${role}-lifecycle-resolution`,
+        producer: { role },
+        context: dispatcherContext(spec),
+        output: {
+          schema: 'llmchat.reviewer-output/v1',
+          result: 'accepted',
+          summary: `${role} accepted the current lifecycle state.`,
+          evidence: ['The machine-readable lifecycle context was handled.'],
+          artifacts: [],
+          dispositions: role === 'qa' ? { Q1: 'resolve' } : {},
+        },
+      })}\n<<<end llmchat.agent-output/v1>>>`;
+    },
+  });
+  h.deps.checkoutWorkerBranch = () => {};
+
+  await dispatch(h.cfg, h.deps);
+
+  assert.deepEqual(h.counts(), { workerCount: 1, qaCount: 1, staffCount: 1 });
+  assert.equal(h.state().status, 'ready_for_human_merge');
+  assert.equal(
+    h.state().agentEnvelopes['qa-lifecycle-resolution'].output.dispositions.Q1,
+    'resolve',
+  );
+});
+
+test('QA omission of a current Q disposition is rejected before acceptance publication', async () => {
+  const commit = '0123456789abcdef0123456789abcdef01234567';
+  const currentFinding = {
+    schema: 'llmchat.agent-output/v1',
+    message_id: 'qa-open-q1-before-omission',
+    producer: { role: 'qa' },
+    context: {
+      run_id: 'reviewer-omission-run',
+      issue: 1,
+      pr: 14,
+      round: 1,
+      commit,
+      feedback_cursor: 'prior-cursor',
+    },
+    output: {
+      schema: 'llmchat.reviewer-output/v1',
+      result: 'changes_requested',
+      summary: 'Current open QA finding.',
+      evidence: ['Deterministic omission fixture.'],
+      artifacts: [
+        {
+          schema: 'review.finding/v1',
+          id: 'Q1',
+          body: 'Disposition Q1 before accepting.',
+          placement: { kind: 'general' },
+        },
+      ],
+      dispositions: {},
+    },
+  };
+  const h = harness([{ number: 1, title: 'a' }], {
+    headRefOid: commit,
+    initialState: {
+      issue: 1,
+      pr: 14,
+      branch: 'codex/issue-1',
+      headSha: commit,
+      workerRunId: 'reviewer-omission-run',
+      status: 'worker_recovery_pending',
+      reviewRound: 2,
+      agentEnvelopes: { [currentFinding.message_id]: currentFinding },
+    },
+    structuredWorkerOutput: ({ spec, commit: workerCommit }) =>
+      readyWorkerEnvelope(spec, workerCommit, 'worker-before-qa-disposition-omission'),
+    structuredReviewerOutput: ({ spec, role }) => {
+      assert.equal(role, 'qa');
+      assert.deepEqual(reviewerLifecycleContext(spec).open_owned_findings, [
+        { id: 'Q1', body: 'Disposition Q1 before accepting.' },
+      ]);
+      return `<<<llmchat.agent-output/v1>>>\n${JSON.stringify({
+        schema: 'llmchat.agent-output/v1',
+        message_id: 'qa-omits-current-q1',
+        producer: { role },
+        context: dispatcherContext(spec),
+        output: {
+          schema: 'llmchat.reviewer-output/v1',
+          result: 'accepted',
+          summary: 'QA incorrectly omitted Q1.',
+          evidence: ['The fixture intentionally omits the required disposition.'],
+          artifacts: [],
+          dispositions: {},
+        },
+      })}\n<<<end llmchat.agent-output/v1>>>`;
+    },
+  });
+  h.deps.checkoutWorkerBranch = () => {};
+
+  await dispatch(h.cfg, h.deps);
+
+  assert.deepEqual(h.counts(), { workerCount: 1, qaCount: 1, staffCount: 0 });
+  assert.match(h.state().lastErrorVerbose, /missing disposition for open finding Q1/);
+  assert.equal(h.state().agentEnvelopes['qa-omits-current-q1'], undefined);
+  assert.equal(
+    h.deps.pullRequest(14).comments.some((comment) => comment.body?.startsWith('[QA/SDET Review]')),
+    false,
+  );
 });
 
 test('dispatcher accepts a Codex output file produced with its checked-in schema', async () => {
@@ -1233,6 +1479,10 @@ test('Codex roles receive full envelope schemas and publication-owned prompts', 
   }
   for (const reviewer of [qa, staff]) {
     const suppliedContext = dispatcherContext(reviewer);
+    assert.deepEqual(reviewerLifecycleContext(reviewer), {
+      open_owned_findings: [],
+      open_human_feedback_ids: [],
+    });
     assert.deepEqual(Object.keys(suppliedContext).sort(), [
       'commit',
       'feedback_cursor',

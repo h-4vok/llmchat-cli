@@ -245,13 +245,26 @@ function validateReviewerOutput(
     if (typeof id === 'string') ids.add(id);
     if (artifact.placement !== undefined) validatePlacement(artifact.placement);
   }
+  const open = new Set(expected.openFindingIds ?? []);
+  const openHuman = new Set(expected.openHumanFeedbackIds ?? []);
+  const allowedDispositions = new Set(
+    role === 'qa'
+      ? [...open].filter((id) => id.startsWith('Q'))
+      : [
+          ...[...open].filter((id) => id.startsWith('S')),
+          ...[...openHuman].filter((id) => id.startsWith('H')),
+        ],
+  );
+  const lifecycleKnown =
+    expected.openFindingIds !== undefined || expected.openHumanFeedbackIds !== undefined;
   for (const [id, disposition] of Object.entries(output.dispositions)) {
     if (!/^[QSH]\d+$/.test(id) || !['continue', 'resolve'].includes(String(disposition)))
       throw new Error('invalid reviewer disposition');
     if (role === 'qa' ? !id.startsWith('Q') : !id.startsWith('S') && !id.startsWith('H'))
       throw new Error('reviewer disposition ownership mismatch');
+    if (lifecycleKnown && !allowedDispositions.has(id))
+      throw new Error(`unknown reviewer disposition: ${id}`);
   }
-  const open = new Set(expected.openFindingIds ?? []);
   const dispositions = output.dispositions as Record<string, string>;
   for (const id of open) {
     if (role === 'qa' && !id.startsWith('Q')) continue;
@@ -264,7 +277,6 @@ function validateReviewerOutput(
     if (allocated.has(artifact.id) && !open.has(artifact.id))
       throw new Error(`finding id was already allocated: ${artifact.id}`);
   }
-  const openHuman = new Set(expected.openHumanFeedbackIds ?? []);
   if (role === 'staff')
     for (const id of openHuman)
       if (!(id in dispositions)) throw new Error(`missing disposition for open feedback ${id}`);

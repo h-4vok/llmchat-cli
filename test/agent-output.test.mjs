@@ -73,6 +73,28 @@ test('state-aware reviewer validation requires lifecycle dispositions and unique
       ),
     /missing disposition/,
   );
+  assert.doesNotThrow(() =>
+    validateEnvelope(
+      {
+        ...envelope,
+        message_id: 'message-q1-resolved',
+        output: { ...envelope.output, dispositions: { Q1: 'resolve' } },
+      },
+      { ...context, role: 'qa', openFindingIds: ['Q1'] },
+    ),
+  );
+  assert.throws(
+    () =>
+      validateEnvelope(
+        {
+          ...envelope,
+          message_id: 'message-unrelated-q2-disposition',
+          output: { ...envelope.output, dispositions: { Q1: 'resolve', Q2: 'resolve' } },
+        },
+        { ...context, role: 'qa', openFindingIds: ['Q1'] },
+      ),
+    /unknown reviewer disposition: Q2/,
+  );
   assert.throws(
     () =>
       validateEnvelope(

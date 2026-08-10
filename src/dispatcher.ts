@@ -972,6 +972,11 @@ async function establishFeedbackBaseline(d: Deps, issue: number, pr?: number): P
   d.save({ ...d.load(), humanFeedbackBaseline: baseline });
 }
 
+type ReviewerLifecycleContext = {
+  open_owned_findings: Array<{ id: string; body: string }>;
+  open_human_feedback_ids: string[];
+};
+
 function rolePrompt(
   issue: Issue,
   role: 'worker' | 'qa' | 'staff',
@@ -983,16 +988,20 @@ function rolePrompt(
   runId: string,
   initialPrBody?: string,
   dispatcherContext?: EnvelopeValidationContext,
+  reviewerLifecycleContext?: ReviewerLifecycleContext,
 ): string {
   const issueContext = issue.body?.trim() || '(issue body unavailable; inspect it with gh)';
   const exactContext = dispatcherContext
     ? `Dispatcher-issued envelope context (copy every supplied value exactly; placeholders such as "unknown" are invalid):\n${JSON.stringify(dispatcherContext)}\n`
     : '';
+  const lifecycleContext = reviewerLifecycleContext
+    ? `Dispatcher-issued reviewer lifecycle context (machine-readable; output.dispositions must contain exactly one continue or resolve entry for every open_owned_findings id${reviewerLifecycleContext.open_human_feedback_ids.length ? ' and every open_human_feedback_ids id' : ''}):\n${JSON.stringify(reviewerLifecycleContext)}\n`
+    : '';
   if (role === 'worker')
     return `Use the worker skill for GitHub issue #${issue.number}: ${issue.title}. This is dispatcher recovery run ${runId}, review round ${round}. Continue the existing task in the current checkout. ${pr ? `An existing PR is #${pr}; update that PR and never create a second PR.` : 'Create exactly one PR targeting staging if one does not exist.'} Do not merge. The claimed issue number is ${issue.number} (also in LLMCHAT_ISSUE_NUMBER). The dispatcher has generated the initial PR body in LLMCHAT_PR_BODY: ${JSON.stringify(initialPrBody ?? '')}. If creating a PR, pass that exact value to gh pr create using --body-file (or an equivalent file-based body argument); do not construct the closing reference yourself. When updating the PR, preserve every state-authorized closing reference supplied in the recovery context exactly once; do not add or remove other issue links without dispatcher instruction. Use gh pr create/edit (or equivalent) to persist that body. Inspect the issue, current PR diff, CI checks, mergeability, and relevant review context. Populate output.resolutions only for IDs listed under Current v1 reviewer findings; never emit a resolution for an ID found only in legacy Markdown, issue/PR comments, or human H feedback. Address current human feedback in the work and evidence; Staff owns its H-item disposition lifecycle. If the PR is CONFLICTING or DIRTY against staging, update the branch from staging, resolve every conflict, run the required checks, and do not report ready_for_review until the PR is clean and mergeable. Resolve every actionable current v1 finding. Do not publish GitHub review, evidence, or Worker comments: return exactly one llmchat.agent-output/v1 envelope as your final result; the dispatcher owns all publication. Include the structured human-verification guide in that envelope. ${exactContext}Return the resulting PR number and full post-work head commit in the remaining context fields. Never delete or modify .llmchat/state.json or dispatcher runtime state. Exit 0 only after the work, conflict resolution, and PR update are complete; do not return Markdown evidence. Issue body:\n${issueContext}\n${context ? `Recovered context:\n${context}\n` : ''}${feedback ? `${feedback}\n` : ''}`;
   if (role === 'qa')
-    return `Use the qa-sdet skill for GitHub issue #${issue.number}: ${issue.title}. Review PR #${pr} against staging before Staff. Current head is ${headSha ?? 'unknown'} and this is review round ${round}. ${exactContext}The same machine-readable JSON is available in LLMCHAT_AGENT_CONTEXT and enforced as constants by the supplied Codex schema. Inspect the acceptance criteria, diff, CI check results, regression coverage, and smoke evidence. Do not publish directly to GitHub. Return exactly one llmchat.agent-output/v1 envelope using the supplied reviewer schema, with typed findings, notes, summary, evidence, and dispositions. Reserve stable Q<n> IDs exclusively for review.finding/v1 artifacts. Informational review.note/v1, review.summary/v1, and review.evidence/v1 artifacts must omit id; when the Codex transport schema requires the nullable field, emit id: null so canonicalization omits it. Never reuse a finding ID for an informational artifact. Do not edit code or merge. Exit 0 after returning the structured envelope. Issue body:\n${issueContext}`;
-  return `Use the staff-reviewer skill for GitHub issue #${issue.number}: ${issue.title}. Review PR #${pr} against staging after QA has passed. Current head is ${headSha ?? 'unknown'} and this is review round ${round}. ${exactContext}The same machine-readable JSON is available in LLMCHAT_AGENT_CONTEXT and enforced as constants by the supplied Codex schema. Perform the independent adversarial review for design, security, regressions, boundaries, and abuse cases. Do not publish directly to GitHub. Return exactly one llmchat.agent-output/v1 envelope using the supplied reviewer schema, with typed findings, notes, summary, evidence, and dispositions. Reserve stable S<n> IDs exclusively for review.finding/v1 artifacts. Informational review.note/v1, review.summary/v1, and review.evidence/v1 artifacts must omit id; when the Codex transport schema requires the nullable field, emit id: null so canonicalization omits it. Never reuse a finding ID for an informational artifact. Do not edit code or merge. Exit 0 after returning the structured envelope. Issue body:\n${issueContext}`;
+    return `Use the qa-sdet skill for GitHub issue #${issue.number}: ${issue.title}. Review PR #${pr} against staging before Staff. Current head is ${headSha ?? 'unknown'} and this is review round ${round}. ${exactContext}${lifecycleContext}The envelope context JSON is available in LLMCHAT_AGENT_CONTEXT, and the reviewer lifecycle JSON is available in LLMCHAT_REVIEWER_CONTEXT; the supplied Codex schema binds the envelope values and every required disposition. Inspect the acceptance criteria, diff, CI check results, regression coverage, and smoke evidence. Do not publish directly to GitHub. Return exactly one llmchat.agent-output/v1 envelope using the supplied reviewer schema, with typed findings, notes, summary, evidence, and dispositions. Reserve stable Q<n> IDs exclusively for review.finding/v1 artifacts. Informational review.note/v1, review.summary/v1, and review.evidence/v1 artifacts must omit id; when the Codex transport schema requires the nullable field, emit id: null so canonicalization omits it. Never reuse a finding ID for an informational artifact. Do not edit code or merge. Exit 0 after returning the structured envelope. Issue body:\n${issueContext}`;
+  return `Use the staff-reviewer skill for GitHub issue #${issue.number}: ${issue.title}. Review PR #${pr} against staging after QA has passed. Current head is ${headSha ?? 'unknown'} and this is review round ${round}. ${exactContext}${lifecycleContext}The envelope context JSON is available in LLMCHAT_AGENT_CONTEXT, and the reviewer lifecycle JSON is available in LLMCHAT_REVIEWER_CONTEXT; the supplied Codex schema binds the envelope values and every required disposition. Perform the independent adversarial review for design, security, regressions, boundaries, and abuse cases. Do not publish directly to GitHub. Return exactly one llmchat.agent-output/v1 envelope using the supplied reviewer schema, with typed findings, notes, summary, evidence, and dispositions. Reserve stable S<n> IDs exclusively for review.finding/v1 artifacts. Informational review.note/v1, review.summary/v1, and review.evidence/v1 artifacts must omit id; when the Codex transport schema requires the nullable field, emit id: null so canonicalization omits it. Never reuse a finding ID for an informational artifact. Do not edit code or merge. Exit 0 after returning the structured envelope. Issue body:\n${issueContext}`;
 }
 
 function roleCommand(value: Command | undefined, issue: number, cfg: Config): Spec | undefined {
@@ -1338,6 +1347,34 @@ export function codexResponseSchema(
   const definition = structuredClone(outputSchema);
   delete definition.$schema;
   delete definition.$id;
+  if (role === 'qa' || role === 'staff') {
+    const requiredDispositionIds = [
+      ...(expectedContext.openFindingIds ?? []).filter((id) =>
+        role === 'qa' ? /^Q\d+$/.test(id) : /^S\d+$/.test(id),
+      ),
+      ...(role === 'staff'
+        ? (expectedContext.openHumanFeedbackIds ?? []).filter((id) => /^H\d+$/.test(id))
+        : []),
+    ].filter((id, index, values) => values.indexOf(id) === index);
+    if (requiredDispositionIds.length) {
+      const definitionProperties = schemaObject(
+        definition.properties,
+        'reviewer output properties',
+      );
+      definitionProperties.dispositions = {
+        type: 'object',
+        description: `Emit exactly one disposition for each currently open owned item: ${requiredDispositionIds.join(', ')}.`,
+        properties: Object.fromEntries(
+          requiredDispositionIds.map((id) => [
+            id,
+            { type: 'string', enum: ['continue', 'resolve'] },
+          ]),
+        ),
+        required: requiredDispositionIds,
+        additionalProperties: false,
+      };
+    }
+  }
   const existingDefinitions =
     envelope.$defs === undefined
       ? {}
@@ -1503,39 +1540,83 @@ function readStructuredOutput(
   return validateEnvelope(canonicalCodexResponse(value, role), { ...context, role });
 }
 
-function findingState(state: State, role?: 'worker' | 'qa' | 'staff'): EnvelopeValidationContext {
-  const allocated = new Set<string>();
-  const latestDisposition = new Map<string, string>();
+type PersistedReviewFinding = {
+  id: string;
+  body: string;
+  owner: 'qa' | 'staff';
+};
+
+const findingIdOrder = (left: string, right: string): number =>
+  left.localeCompare(right, undefined, { numeric: true });
+
+function persistedReviewFindings(state: State): Map<string, PersistedReviewFinding> {
+  const findings = new Map<string, PersistedReviewFinding>();
   for (const envelope of Object.values(state.agentEnvelopes ?? {})) {
+    if (envelope.producer.role !== 'qa' && envelope.producer.role !== 'staff') continue;
     const output = envelope.output as ReviewerOutput;
     if (!('artifacts' in output)) continue;
-    for (const artifact of output.artifacts) {
-      if (artifact.schema === 'review.finding/v1' && artifact.id) {
-        allocated.add(artifact.id);
-        if (output.dispositions[artifact.id])
-          latestDisposition.set(artifact.id, output.dispositions[artifact.id]);
-      }
-    }
+    const prefix = envelope.producer.role === 'qa' ? 'Q' : 'S';
+    for (const artifact of output.artifacts)
+      if (
+        artifact.schema === 'review.finding/v1' &&
+        artifact.id &&
+        new RegExp(`^${prefix}\\d+$`).test(artifact.id) &&
+        !findings.has(artifact.id)
+      )
+        findings.set(artifact.id, {
+          id: artifact.id,
+          body: artifact.body,
+          owner: envelope.producer.role,
+        });
+  }
+  return findings;
+}
+
+function findingState(state: State, role?: 'worker' | 'qa' | 'staff'): EnvelopeValidationContext {
+  const findings = persistedReviewFindings(state);
+  const latestDisposition = new Map<string, string>();
+  for (const envelope of Object.values(state.agentEnvelopes ?? {})) {
+    if (envelope.producer.role !== 'qa' && envelope.producer.role !== 'staff') continue;
+    const output = envelope.output as ReviewerOutput;
+    if (!('artifacts' in output)) continue;
     for (const [id, disposition] of Object.entries(output.dispositions)) {
-      if (id.match(/^[QS]\d+$/)) {
-        allocated.add(id);
+      if (findings.get(id)?.owner === envelope.producer.role)
         latestDisposition.set(id, disposition);
-      }
     }
   }
-  const open = [...allocated].filter((id) => latestDisposition.get(id) !== 'resolve');
+  const open = [...findings.values()]
+    .filter(
+      (finding) =>
+        latestDisposition.get(finding.id) !== 'resolve' &&
+        (role === undefined || role === 'worker' || finding.owner === role),
+    )
+    .map((finding) => finding.id)
+    .sort(findingIdOrder);
   const openHumanFeedbackIds = Object.entries(state.humanFeedback ?? {})
     .filter(
       ([, value]) =>
         (value as any)?.status !== 'withdrawn' && (value as any)?.status !== 'resolved',
     )
     .map(([id]) => id)
-    .filter((id) => /^H\d+$/.test(id));
+    .filter((id) => /^H\d+$/.test(id))
+    .sort(findingIdOrder);
   return {
-    allocatedFindingIds: [...allocated],
+    allocatedFindingIds: [...findings.keys()].sort(findingIdOrder),
     openFindingIds: [...open],
     openHumanFeedbackIds,
     ...(role ? { role } : {}),
+  };
+}
+
+function reviewerLifecycleContext(state: State, role: 'qa' | 'staff'): ReviewerLifecycleContext {
+  const findings = persistedReviewFindings(state);
+  const lifecycle = findingState(state, role);
+  return {
+    open_owned_findings: (lifecycle.openFindingIds ?? []).map((id) => ({
+      id,
+      body: findings.get(id)?.body ?? '(finding body unavailable)',
+    })),
+    open_human_feedback_ids: role === 'staff' ? (lifecycle.openHumanFeedbackIds ?? []) : [],
   };
 }
 
@@ -1827,22 +1908,7 @@ async function publishStaleWorkerOutput(
 }
 
 function openFindingIds(state: State, role: 'qa' | 'staff'): string[] {
-  const prefix = role === 'qa' ? 'Q' : 'S';
-  const ids = new Set<string>();
-  for (const envelope of Object.values(state.agentEnvelopes ?? {})) {
-    const output = envelope.output as ReviewerOutput;
-    if (!('artifacts' in output)) continue;
-    for (const artifact of output.artifacts)
-      if (
-        artifact.schema === 'review.finding/v1' &&
-        artifact.id?.startsWith(prefix) &&
-        output.dispositions[artifact.id] !== 'resolve'
-      )
-        ids.add(artifact.id);
-    for (const [id, disposition] of Object.entries(output.dispositions))
-      if (id.startsWith(prefix) && disposition !== 'resolve') ids.add(id);
-  }
-  return [...ids];
+  return findingState(state, role).openFindingIds ?? [];
 }
 
 async function dispatchWorkerResolutions(d: Deps, pr: number, output: WorkerOutput): Promise<void> {
@@ -2383,6 +2449,11 @@ async function runReview(
     commit,
     feedback_cursor: feedbackCursorBefore,
   };
+  const lifecycleContext = reviewerLifecycleContext(d.load(), role);
+  const reviewerValidationContext: EnvelopeValidationContext = {
+    ...findingState(d.load(), role),
+    ...dispatcherContext,
+  };
   const output = await d.run(
     structuredRoleSpec(
       {
@@ -2390,6 +2461,7 @@ async function runReview(
         env: {
           ...spec.env,
           LLMCHAT_AGENT_CONTEXT: JSON.stringify(dispatcherContext),
+          LLMCHAT_REVIEWER_CONTEXT: JSON.stringify(lifecycleContext),
         },
         input: rolePrompt(
           issue,
@@ -2402,22 +2474,15 @@ async function runReview(
           d.load().workerRunId ?? 'dispatcher-run',
           undefined,
           dispatcherContext,
+          lifecycleContext,
         ),
       },
       role,
       runId,
-      dispatcherContext,
+      reviewerValidationContext,
     ),
   );
-  const structured = readStructuredOutput(
-    runId,
-    role,
-    {
-      ...findingState(d.load(), role),
-      ...dispatcherContext,
-    },
-    output,
-  );
+  const structured = readStructuredOutput(runId, role, reviewerValidationContext, output);
   if (structured) {
     const current = d.pullRequest ? await d.pullRequest(prNumber) : evidence;
     if (d.pullRequest) ingestHumanFeedback(d, current, issue.number);
