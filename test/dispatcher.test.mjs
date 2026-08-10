@@ -207,9 +207,11 @@ function harness(
       const round = Number(spec.input?.match(/review round (\d+)/)?.[1] ?? 1);
       if (role === 'worker') {
         workerCount += 1;
-        pr.headRefOid = overrides.structuredWorkerOutput
-          ? '0123456789abcdef0123456789abcdef01234567'
-          : `abc${workerCount}`;
+        if (!overrides.structuredWorkerOutput || workerCount === 1)
+          pr.headRefOid = overrides.structuredWorkerOutput
+            ? '0123456789abcdef0123456789abcdef01234567'
+            : `abc${workerCount}`;
+        const structuredCommit = pr.headRefOid;
         if (overrides.workerCreatesPr) {
           // Model the Worker passing the dispatcher-owned payload directly to
           // `gh pr create --body-file`; this is the initial remote PR body.
@@ -217,10 +219,11 @@ function harness(
           createdPrBodies.push(pr.body);
         }
         spec.onStart?.(1000 + workerCount);
+        overrides.workerDuringRun?.({ pr, workerCount });
         spec.onHeartbeat?.();
         if (overrides.structuredWorkerOutput) {
-          const runId = spec.input.match(/dispatcher recovery run ([0-9a-f-]+)/i)?.[1];
-          return overrides.structuredWorkerOutput({ spec, runId, commit: pr.headRefOid });
+          const runId = spec.input.match(/dispatcher (?:recovery )?run ([0-9a-f-]+)/i)?.[1];
+          return overrides.structuredWorkerOutput({ spec, runId, commit: structuredCommit });
         }
         if (publishEvidence.worker) {
           const verification = humanVerification
@@ -565,6 +568,56 @@ test('valid structured Worker output is dispatcher-published without role-author
   assert.equal(workerComments.length, 1);
   assert.match(workerComments[0].body, /llmchat-worker-publish:v1/);
   assert.equal(h.state().status, 'ready_for_human_merge');
+});
+
+test('structured Worker output is preserved as stale and rerun after a PR head change', async () => {
+  const initialCommit = '0123456789abcdef0123456789abcdef01234567';
+  const changedCommit = 'fedcba9876543210fedcba9876543210fedcba98';
+  const h = harness([{ number: 1, title: 'a' }], {
+    workerDuringRun: ({ pr, workerCount }) => {
+      if (workerCount === 1) pr.headRefOid = changedCommit;
+    },
+    structuredWorkerOutput: ({ runId, commit }) =>
+      `<<<llmchat.agent-output/v1>>>\n${JSON.stringify({
+        schema: 'llmchat.agent-output/v1',
+        message_id: `worker-freshness-${commit}`,
+        producer: { role: 'worker' },
+        context: {
+          run_id: runId,
+          issue: 1,
+          pr: 14,
+          round: 1,
+          commit,
+          feedback_cursor: 'cursor-1',
+        },
+        output: {
+          schema: 'llmchat.worker-output/v1',
+          status: 'ready_for_review',
+          resolutions: [],
+          evidence: ['Worker freshness is deterministic.'],
+          human_verification: {
+            summary: 'Verify stale Worker output is isolated from state advancement.',
+            steps: ['Run the focused freshness test in a disposable checkout.'],
+            expected: ['Stale output is marked and a current Worker run follows it.'],
+            isolation: 'Use a disposable checkout and do not modify GitHub state.',
+            limitations: ['The harness models GitHub head refreshes without credentials.'],
+            checklist: ['Confirm the stale marker and two Worker invocations.'],
+          },
+        },
+      })}\n<<<end llmchat.agent-output/v1>>>`,
+  });
+
+  await dispatch(h.cfg, h.deps);
+
+  assert.deepEqual(h.counts(), { workerCount: 2, qaCount: 1, staffCount: 1 });
+  const stale = h.deps
+    .pullRequest(14)
+    .comments.filter((comment) => comment.body?.includes('stale_context'));
+  assert.equal(stale.length, 1);
+  assert.match(stale[0].body, new RegExp(`commit=${initialCommit}`));
+  assert.match(stale[0].body, new RegExp(`current_commit=${changedCommit}`));
+  assert.equal(h.state().status, 'ready_for_human_merge');
+  assert.equal(h.state().headSha, changedCommit);
 });
 
 test('Codex roles receive full envelope schemas and publication-owned prompts', async () => {
