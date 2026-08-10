@@ -1092,6 +1092,7 @@ test('Codex response schema replaces the exact reviewer placement oneOf safely',
 
   const schema = codexResponseSchema(envelope, output);
   const artifact = schema.$defs.output.properties.artifacts.items;
+  assert.match(artifact.description, /Informational .* must omit id/);
   const placement = artifact.properties.placement;
   assert.equal(placement.oneOf, undefined);
   assert.deepEqual(
@@ -1103,6 +1104,7 @@ test('Codex response schema replaces the exact reviewer placement oneOf safely',
   assert.deepEqual(inline.properties.start_line.type, ['integer', 'null']);
   assert.deepEqual(artifact.required, ['schema', 'id', 'body', 'severity', 'placement']);
   assert.deepEqual(artifact.properties.id.type, ['string', 'null']);
+  assert.match(artifact.properties.id.description, /reserved exclusively for review\.finding\/v1/);
   assert.deepEqual(artifact.properties.severity.type, ['string', 'null']);
   assert.ok(artifact.properties.severity.enum.includes(null));
   assert.deepEqual(schema.$defs.output.properties.dispositions, {
@@ -1242,6 +1244,11 @@ test('Codex roles receive full envelope schemas and publication-owned prompts', 
     assert.notEqual(suppliedContext.run_id, 'unknown');
     assert.notEqual(suppliedContext.feedback_cursor, 'unknown');
     assert.match(reviewer.input, /placeholders such as "unknown" are invalid/);
+    assert.match(
+      reviewer.input,
+      /Informational review\.note\/v1, review\.summary\/v1, and review\.evidence\/v1 artifacts must omit id/,
+    );
+    assert.match(reviewer.input, /Never reuse a finding ID for an informational artifact/);
   }
 });
 

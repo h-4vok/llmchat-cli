@@ -239,8 +239,9 @@ function validateReviewerOutput(
       if (typeof id !== 'string' || !new RegExp(`^${prefix}\\d+$`).test(id) || ids.has(id))
         throw new Error('invalid or duplicate finding id');
       actionable++;
-    } else if (id !== undefined && (typeof id !== 'string' || ids.has(id)))
-      throw new Error('invalid or duplicate artifact id');
+    } else if (id !== undefined) {
+      throw new Error('informational review artifact id must be omitted');
+    }
     if (typeof id === 'string') ids.add(id);
     if (artifact.placement !== undefined) validatePlacement(artifact.placement);
   }

@@ -12,6 +12,7 @@
       "type": "array",
       "items": {
         "type": "object",
+        "description": "review.finding/v1 requires a stable Q/S id. Informational review.note/v1, review.summary/v1, and review.evidence/v1 artifacts must omit id; Codex transports represent that omission as null.",
         "required": ["schema", "body"],
         "properties": {
           "schema": {
@@ -23,7 +24,11 @@
               "review.evidence/v1"
             ]
           },
-          "id": { "type": "string", "pattern": "^[QS][0-9]+$" },
+          "id": {
+            "type": "string",
+            "pattern": "^[QS][0-9]+$",
+            "description": "Stable lifecycle ID reserved exclusively for review.finding/v1. Omit it from informational artifacts."
+          },
           "body": { "type": "string", "minLength": 1 },
           "severity": { "type": "string", "enum": ["low", "medium", "high", "critical"] },
           "placement": {

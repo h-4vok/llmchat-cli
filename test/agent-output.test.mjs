@@ -97,6 +97,69 @@ test('state-aware reviewer validation requires lifecycle dispositions and unique
   );
 });
 
+test('informational reviewer artifacts omit stable finding IDs', () => {
+  const valid = {
+    ...envelope,
+    message_id: 'message-informational-ids-valid',
+    output: {
+      ...envelope.output,
+      result: 'changes_requested',
+      artifacts: [
+        {
+          schema: 'review.finding/v1',
+          id: 'Q12',
+          body: 'First actionable finding.',
+          placement: { kind: 'general' },
+        },
+        {
+          schema: 'review.finding/v1',
+          id: 'Q13',
+          body: 'Second actionable finding.',
+          placement: { kind: 'general' },
+        },
+        {
+          schema: 'review.summary/v1',
+          body: 'Informational summary without a lifecycle ID.',
+          placement: { kind: 'general' },
+        },
+        {
+          schema: 'review.evidence/v1',
+          body: 'Informational evidence without a lifecycle ID.',
+          placement: { kind: 'general' },
+        },
+      ],
+    },
+  };
+  assert.doesNotThrow(() => validateEnvelope(valid, { ...context, role: 'qa' }));
+
+  assert.throws(
+    () =>
+      validateEnvelope(
+        {
+          ...envelope,
+          message_id: 'message-informational-ids-duplicate',
+          output: {
+            ...envelope.output,
+            artifacts: [
+              {
+                schema: 'review.summary/v1',
+                id: 'Q12',
+                body: 'Summary incorrectly reusing a finding ID.',
+              },
+              {
+                schema: 'review.evidence/v1',
+                id: 'Q12',
+                body: 'Evidence incorrectly reusing the same finding ID.',
+              },
+            ],
+          },
+        },
+        { ...context, role: 'qa' },
+      ),
+    /informational review artifact id must be omitted/,
+  );
+});
+
 test('Worker resolution references must exist in persisted reviewer findings', () => {
   const worker = {
     ...envelope,
