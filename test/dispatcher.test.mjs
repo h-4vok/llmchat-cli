@@ -21,11 +21,50 @@ import {
   runCommand,
   parseRoleReviewOutput,
 } from '../dist/dispatcher.js';
+import { inlinePayload, placement, publishFindings } from '../dist/review-publication.js';
+
+test('review publication selects verified changed lines and exact REST payloads', async () => {
+  const changed = new Map([['src/app.ts', new Set([4, 5])]]);
+  assert.equal(placement({ body: 'fix', file: 'src/app.ts', line: 4 }, changed), 'inline');
+  assert.equal(placement({ body: 'summary' }, changed), 'general');
+  assert.deepEqual(
+    inlinePayload({ body: 'fix', file: 'src/app.ts', line: 4, side: 'RIGHT' }, 'abc', changed),
+    {
+      body: 'fix',
+      commit_id: 'abc',
+      path: 'src/app.ts',
+      line: 4,
+      side: 'RIGHT',
+    },
+  );
+});
+
+test('review publication falls back completely and preserves idempotent caller boundary', async () => {
+  const inline = [];
+  const general = [];
+  await publishFindings(
+    [{ body: 'bad', file: 'src/app.ts', line: 4 }, { body: 'summary' }],
+    'abc',
+    new Map([['src/app.ts', new Set([4])]]),
+    async (payload) => {
+      inline.push(payload);
+      throw new Error('stale location');
+    },
+    async (body) => general.push(body),
+  );
+  assert.equal(inline.length, 1);
+  assert.deepEqual(general, ['[Inline fallback] src/app.ts:4\nbad', 'summary']);
+});
 
 test('role review output requires the dispatcher delimiter and matching metadata', () => {
   const body = '[QA/SDET Review] round=2 verdict=passed commit=abc123\nNo findings.';
   assert.equal(
-    parseRoleReviewOutput(`LLMCHAT_REVIEW_BEGIN\n${body}\nLLMCHAT_REVIEW_END`, '[QA/SDET Review]', 2, 'abc123'),
+    parseRoleReviewOutput(
+      `LLMCHAT_REVIEW_BEGIN\n${body}\nLLMCHAT_REVIEW_END`,
+      '[QA/SDET Review]',
+      2,
+      'abc123',
+    ),
     body,
   );
   assert.throws(
@@ -33,7 +72,13 @@ test('role review output requires the dispatcher delimiter and matching metadata
     /delimited review body/,
   );
   assert.throws(
-    () => parseRoleReviewOutput(`LLMCHAT_REVIEW_BEGIN\n${body.replace('round=2', 'round=1')}\nLLMCHAT_REVIEW_END`, '[QA/SDET Review]', 2, 'abc123'),
+    () =>
+      parseRoleReviewOutput(
+        `LLMCHAT_REVIEW_BEGIN\n${body.replace('round=2', 'round=1')}\nLLMCHAT_REVIEW_END`,
+        '[QA/SDET Review]',
+        2,
+        'abc123',
+      ),
     /matching commit|round=2/,
   );
 });
@@ -238,14 +283,18 @@ function harness(
       if (role === 'qa') {
         qaCount += 1;
         const verdict = qaVerdicts[qaCount - 1] ?? qaVerdicts.at(-1);
-        return `LLMCHAT_REVIEW_BEGIN\n${qaBodies?.[qaCount - 1] ??
-          `[QA/SDET Review] round=${round} verdict=${verdict} commit=${pr.headRefOid}`}\nLLMCHAT_REVIEW_END`;
+        return `LLMCHAT_REVIEW_BEGIN\n${
+          qaBodies?.[qaCount - 1] ??
+          `[QA/SDET Review] round=${round} verdict=${verdict} commit=${pr.headRefOid}`
+        }\nLLMCHAT_REVIEW_END`;
       }
       if (role === 'staff') {
         staffCount += 1;
         const verdict = staffVerdicts[staffCount - 1] ?? staffVerdicts.at(-1);
-        return `LLMCHAT_REVIEW_BEGIN\n${staffBodies?.[staffCount - 1] ??
-          `[Staff Review] round=${round} verdict=${verdict} commit=${pr.headRefOid}`}\nLLMCHAT_REVIEW_END`;
+        return `LLMCHAT_REVIEW_BEGIN\n${
+          staffBodies?.[staffCount - 1] ??
+          `[Staff Review] round=${round} verdict=${verdict} commit=${pr.headRefOid}`
+        }\nLLMCHAT_REVIEW_END`;
       }
       return 'completed';
     },
@@ -260,8 +309,11 @@ function harness(
     },
     pullRequestBody: () => pr.body,
     publishReview: async (number, body) => {
-      if ((body.startsWith('[QA/SDET Review]') && !publishEvidence.qa) ||
-          (body.startsWith('[Staff Review]') && !publishEvidence.staff)) return;
+      if (
+        (body.startsWith('[QA/SDET Review]') && !publishEvidence.qa) ||
+        (body.startsWith('[Staff Review]') && !publishEvidence.staff)
+      )
+        return;
       reviews.push({ body, commitId: pr.headRefOid, submittedAt: `${reviews.length + 1}` });
     },
     now: () => Date.now(),
