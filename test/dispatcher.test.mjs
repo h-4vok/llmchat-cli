@@ -831,6 +831,7 @@ test('Worker context separates legacy review IDs while preserving resolvable v1 
           schema: 'review.finding/v1',
           id: 'Q1',
           body: 'Fix the current structured boundary regression.',
+          severity: 'high',
           placement: { kind: 'general' },
         },
       ],
@@ -849,6 +850,7 @@ test('Worker context separates legacy review IDs while preserving resolvable v1 
           schema: 'review.finding/v1',
           id: 'S2',
           body: 'Preserve the current structured lifecycle routing.',
+          severity: 'medium',
           placement: { kind: 'general' },
         },
       ],
@@ -1019,6 +1021,7 @@ test('QA receives only current owned Q findings and resolves each required dispo
           schema: 'review.finding/v1',
           id: 'Q1',
           body: 'Resolve the current QA lifecycle finding.',
+          severity: 'high',
           placement: { kind: 'general' },
         },
       ],
@@ -1135,6 +1138,7 @@ test('accepted QA omission continues with a durable automatic Q waiver', async (
           schema: 'review.finding/v1',
           id: 'Q1',
           body: 'Disposition Q1 before accepting.',
+          severity: 'medium',
           placement: { kind: 'general' },
         },
       ],
@@ -1249,6 +1253,7 @@ test('approved Staff omission continues with an automatic S waiver through the i
           schema: 'review.finding/v1',
           id: 'S1',
           body: 'Preserve the S1 inline resolution endpoint.',
+          severity: 'high',
           placement: { kind: 'general' },
         },
       ],
@@ -1365,6 +1370,7 @@ test('changes_requested omission of an open Q finding still blocks before public
           schema: 'review.finding/v1',
           id: 'Q1',
           body: 'Q1 remains lifecycle-owned until explicitly continued or resolved.',
+          severity: 'medium',
           placement: { kind: 'general' },
         },
       ],
@@ -1402,6 +1408,7 @@ test('changes_requested omission of an open Q finding still blocks before public
               schema: 'review.finding/v1',
               id: 'Q2',
               body: 'A newly emitted finding keeps changes_requested internally consistent.',
+              severity: 'medium',
               placement: { kind: 'general' },
             },
           ],
@@ -1585,6 +1592,8 @@ test('Codex response schema replaces the exact reviewer placement oneOf safely',
   const schema = codexResponseSchema(envelope, output);
   const artifact = schema.$defs.output.properties.artifacts.items;
   assert.match(artifact.description, /Informational .* must omit id/);
+  assert.equal(artifact.if, undefined);
+  assert.equal(artifact.then, undefined);
   const placement = artifact.properties.placement;
   assert.equal(placement.oneOf, undefined);
   assert.deepEqual(
@@ -1616,6 +1625,7 @@ test('Codex response schema replaces the exact reviewer placement oneOf safely',
     canonicalPlacement.oneOf,
     'the provider transformation must not mutate the canonical schema',
   );
+  assert.ok(output.properties.artifacts.items.if, 'canonical finding condition must be retained');
 });
 
 test('Codex response schema rejects unsupported canonical union constructs', () => {
@@ -1647,6 +1657,28 @@ test('Codex response schema rejects unsupported canonical union constructs', () 
   assert.throws(
     () => codexResponseSchema(envelope, withTypeUnion),
     /unsupported canonical type union/,
+  );
+});
+
+test('Codex response schema rejects nested definitions and open objects before provider submission', () => {
+  const envelope = JSON.parse(readFileSync('schemas/worker-agent-output-v1.json', 'utf8'));
+  const output = JSON.parse(readFileSync('schemas/worker-output-v1.json', 'utf8'));
+
+  const withNestedDefinitions = structuredClone(output);
+  withNestedDefinitions.$defs = {
+    status: { type: 'string', enum: ['ready_for_review', 'blocked'] },
+  };
+  withNestedDefinitions.properties.status = { $ref: '#/$defs/status' };
+  assert.throws(
+    () => codexResponseSchema(envelope, withNestedDefinitions),
+    /definitions must be top-level/,
+  );
+
+  const withOpenObject = structuredClone(output);
+  delete withOpenObject.properties.human_verification.additionalProperties;
+  assert.throws(
+    () => codexResponseSchema(envelope, withOpenObject),
+    /must set additionalProperties to false/,
   );
 });
 

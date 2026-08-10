@@ -28,13 +28,21 @@ export type Placement =
       line: number;
       start_line?: number;
     };
-export type ReviewArtifact = {
-  schema: 'review.finding/v1' | 'review.note/v1' | 'review.summary/v1' | 'review.evidence/v1';
-  id?: string;
+type InformationalReviewArtifact = {
+  schema: 'review.note/v1' | 'review.summary/v1' | 'review.evidence/v1';
+  id?: never;
   body: string;
   placement?: Placement;
   severity?: 'low' | 'medium' | 'high' | 'critical';
 };
+type ReviewFinding = {
+  schema: 'review.finding/v1';
+  id: string;
+  body: string;
+  placement: Placement;
+  severity: 'low' | 'medium' | 'high' | 'critical';
+};
+export type ReviewArtifact = InformationalReviewArtifact | ReviewFinding;
 export type ReviewerOutput = {
   schema: typeof REVIEWER_SCHEMA;
   result: 'accepted' | 'changes_requested' | 'blocked';
@@ -180,6 +188,16 @@ function validateJsonSchema(value: unknown, schema: JsonSchema, path = '$'): voi
     })
   )
     throw new Error(`schema oneOf mismatch at ${path}`);
+  if (schema.if) {
+    let matches = true;
+    try {
+      validateJsonSchema(value, schema.if, path);
+    } catch {
+      matches = false;
+    }
+    const branch = matches ? schema.then : schema.else;
+    if (branch) validateJsonSchema(value, branch, path);
+  }
   if (schema.type === 'array' && schema.items)
     (value as unknown[]).forEach((item, index) =>
       validateJsonSchema(item, schema.items, `${path}[${index}]`),
@@ -238,12 +256,17 @@ function validateReviewerOutput(
       const prefix = role === 'qa' ? 'Q' : 'S';
       if (typeof id !== 'string' || !new RegExp(`^${prefix}\\d+$`).test(id) || ids.has(id))
         throw new Error('invalid or duplicate finding id');
+      if (!['low', 'medium', 'high', 'critical'].includes(String(artifact.severity)))
+        throw new Error('review finding severity is required');
+      if (artifact.placement === undefined) throw new Error('review finding placement is required');
+      validatePlacement(artifact.placement);
       actionable++;
     } else if (id !== undefined) {
       throw new Error('informational review artifact id must be omitted');
     }
     if (typeof id === 'string') ids.add(id);
-    if (artifact.placement !== undefined) validatePlacement(artifact.placement);
+    if (artifact.schema !== 'review.finding/v1' && artifact.placement !== undefined)
+      validatePlacement(artifact.placement);
   }
   const open = new Set(expected.openFindingIds ?? []);
   const openHuman = new Set(expected.openHumanFeedbackIds ?? []);

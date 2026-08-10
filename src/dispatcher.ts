@@ -1000,8 +1000,8 @@ function rolePrompt(
   if (role === 'worker')
     return `Use the worker skill for GitHub issue #${issue.number}: ${issue.title}. This is dispatcher recovery run ${runId}, review round ${round}. Continue the existing task in the current checkout. ${pr ? `An existing PR is #${pr}; update that PR and never create a second PR.` : 'Create exactly one PR targeting staging if one does not exist.'} Do not merge. The claimed issue number is ${issue.number} (also in LLMCHAT_ISSUE_NUMBER). The dispatcher has generated the initial PR body in LLMCHAT_PR_BODY: ${JSON.stringify(initialPrBody ?? '')}. If creating a PR, pass that exact value to gh pr create using --body-file (or an equivalent file-based body argument); do not construct the closing reference yourself. When updating the PR, preserve every state-authorized closing reference supplied in the recovery context exactly once; do not add or remove other issue links without dispatcher instruction. Use gh pr create/edit (or equivalent) to persist that body. Inspect the issue, current PR diff, CI checks, mergeability, and relevant review context. Populate output.resolutions only for IDs listed under Current v1 reviewer findings; never emit a resolution for an ID found only in legacy Markdown, issue/PR comments, or human H feedback. Address current human feedback in the work and evidence; Staff owns its H-item disposition lifecycle. If the PR is CONFLICTING or DIRTY against staging, update the branch from staging, resolve every conflict, run the required checks, and do not report ready_for_review until the PR is clean and mergeable. Resolve every actionable current v1 finding. Do not publish GitHub review, evidence, or Worker comments: return exactly one llmchat.agent-output/v1 envelope as your final result; the dispatcher owns all publication. Include the structured human-verification guide in that envelope. ${exactContext}Return the resulting PR number and full post-work head commit in the remaining context fields. Never delete or modify .llmchat/state.json or dispatcher runtime state. Exit 0 only after the work, conflict resolution, and PR update are complete; do not return Markdown evidence. Issue body:\n${issueContext}\n${context ? `Recovered context:\n${context}\n` : ''}${feedback ? `${feedback}\n` : ''}`;
   if (role === 'qa')
-    return `Use the qa-sdet skill for GitHub issue #${issue.number}: ${issue.title}. Review PR #${pr} against staging before Staff. Current head is ${headSha ?? 'unknown'} and this is review round ${round}. ${exactContext}${lifecycleContext}The envelope context JSON is available in LLMCHAT_AGENT_CONTEXT, and the reviewer lifecycle JSON is available in LLMCHAT_REVIEWER_CONTEXT; the supplied Codex schema binds the envelope values and allowed lifecycle IDs. Inspect the acceptance criteria, diff, CI check results, regression coverage, and smoke evidence. Do not publish directly to GitHub. Return exactly one llmchat.agent-output/v1 envelope using the supplied reviewer schema, with typed findings, notes, summary, evidence, and dispositions. Reserve stable Q<n> IDs exclusively for review.finding/v1 artifacts. Informational review.note/v1, review.summary/v1, and review.evidence/v1 artifacts must omit id; when the Codex transport schema requires the nullable field, emit id: null so canonicalization omits it. Never reuse a finding ID for an informational artifact. Do not edit code or merge. Exit 0 after returning the structured envelope. Issue body:\n${issueContext}`;
-  return `Use the staff-reviewer skill for GitHub issue #${issue.number}: ${issue.title}. Review PR #${pr} against staging after QA has passed. Current head is ${headSha ?? 'unknown'} and this is review round ${round}. ${exactContext}${lifecycleContext}The envelope context JSON is available in LLMCHAT_AGENT_CONTEXT, and the reviewer lifecycle JSON is available in LLMCHAT_REVIEWER_CONTEXT; the supplied Codex schema binds the envelope values and allowed lifecycle IDs. Perform the independent adversarial review for design, security, regressions, boundaries, and abuse cases. Do not publish directly to GitHub. Return exactly one llmchat.agent-output/v1 envelope using the supplied reviewer schema, with typed findings, notes, summary, evidence, and dispositions. Reserve stable S<n> IDs exclusively for review.finding/v1 artifacts. Informational review.note/v1, review.summary/v1, and review.evidence/v1 artifacts must omit id; when the Codex transport schema requires the nullable field, emit id: null so canonicalization omits it. Never reuse a finding ID for an informational artifact. Do not edit code or merge. Exit 0 after returning the structured envelope. Issue body:\n${issueContext}`;
+    return `Use the qa-sdet skill for GitHub issue #${issue.number}: ${issue.title}. Review PR #${pr} against staging before Staff. Current head is ${headSha ?? 'unknown'} and this is review round ${round}. ${exactContext}${lifecycleContext}The envelope context JSON is available in LLMCHAT_AGENT_CONTEXT, and the reviewer lifecycle JSON is available in LLMCHAT_REVIEWER_CONTEXT; the supplied Codex schema binds the envelope values and allowed lifecycle IDs. Inspect the acceptance criteria, diff, CI check results, regression coverage, and smoke evidence. Do not publish directly to GitHub. Return exactly one llmchat.agent-output/v1 envelope using the supplied reviewer schema, with typed findings, notes, summary, evidence, and dispositions. Every review.finding/v1 requires a stable Q<n> ID, severity, and explicit general or inline placement. Informational review.note/v1, review.summary/v1, and review.evidence/v1 artifacts must omit id and may omit severity or placement; when the Codex transport requires an omitted nullable field, emit null so canonicalization removes it. Never reuse a finding ID for an informational artifact. Do not edit code or merge. Exit 0 after returning the structured envelope. Issue body:\n${issueContext}`;
+  return `Use the staff-reviewer skill for GitHub issue #${issue.number}: ${issue.title}. Review PR #${pr} against staging after QA has passed. Current head is ${headSha ?? 'unknown'} and this is review round ${round}. ${exactContext}${lifecycleContext}The envelope context JSON is available in LLMCHAT_AGENT_CONTEXT, and the reviewer lifecycle JSON is available in LLMCHAT_REVIEWER_CONTEXT; the supplied Codex schema binds the envelope values and allowed lifecycle IDs. Perform the independent adversarial review for design, security, regressions, boundaries, and abuse cases. Do not publish directly to GitHub. Return exactly one llmchat.agent-output/v1 envelope using the supplied reviewer schema, with typed findings, notes, summary, evidence, and dispositions. Every review.finding/v1 requires a stable S<n> ID, severity, and explicit general or inline placement. Informational review.note/v1, review.summary/v1, and review.evidence/v1 artifacts must omit id and may omit severity or placement; when the Codex transport requires an omitted nullable field, emit null so canonicalization removes it. Never reuse a finding ID for an informational artifact. Do not edit code or merge. Exit 0 after returning the structured envelope. Issue body:\n${issueContext}`;
 }
 
 function roleCommand(value: Command | undefined, issue: number, cfg: Config): Spec | undefined {
@@ -1064,6 +1064,33 @@ const unsupportedCodexCompositionKeywords = [
   'then',
   'else',
 ];
+
+function stripCanonicalFindingRequirement(schema: JsonSchema, path: string): void {
+  if (!('if' in schema) && !('then' in schema) && !('else' in schema)) return;
+  const condition = schemaObject(schema.if, `canonical condition at ${path}`);
+  const consequence = schemaObject(schema.then, `canonical consequence at ${path}`);
+  const conditionProperties = schemaObject(
+    condition.properties,
+    `canonical condition properties at ${path}`,
+  );
+  const discriminator = schemaObject(
+    conditionProperties.schema,
+    `canonical condition discriminator at ${path}`,
+  );
+  if (
+    'else' in schema ||
+    condition.type !== 'object' ||
+    consequence.type !== 'object' ||
+    !sameStrings(condition.required, ['schema']) ||
+    !sameStrings(Object.keys(conditionProperties), ['schema']) ||
+    discriminator.const !== 'review.finding/v1' ||
+    !sameStrings(consequence.required, ['id', 'severity', 'placement']) ||
+    Object.keys(consequence).some((key) => !['type', 'required'].includes(key))
+  )
+    throw new Error(`unsupported canonical conditional at ${path}`);
+  delete schema.if;
+  delete schema.then;
+}
 
 function schemaObject(value: unknown, label: string): JsonSchema {
   if (!value || typeof value !== 'object' || Array.isArray(value))
@@ -1150,6 +1177,7 @@ function codexSchemaNode(schemaValue: JsonSchema, path: string, optional = false
   const schema = structuredClone(schemaValue);
   delete schema.$schema;
   delete schema.$id;
+  stripCanonicalFindingRequirement(schema, path);
   for (const keyword of unsupportedCodexCompositionKeywords)
     if (keyword in schema)
       throw new Error(`unsupported Codex Structured Outputs keyword ${keyword} at ${path}`);
@@ -2689,7 +2717,6 @@ async function runReview(
     };
     const header = {
       schema: 'review.summary/v1' as const,
-      id: `${role}-summary`,
       body: `${reviewMarker} round=${round} verdict=${verdict} commit=${commit}\n\n${payload.summary}\n\n${payload.evidence.map((item) => `- ${item}`).join('\n')}`,
     };
     await publish(publishArtifact(header, { runId, role, round, commit }, diffIndex), 'general');

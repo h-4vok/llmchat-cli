@@ -57,6 +57,7 @@ test('state-aware reviewer validation requires lifecycle dispositions and unique
           schema: 'review.finding/v1',
           id: 'Q1',
           body: 'fix',
+          severity: 'high',
           placement: { kind: 'general' },
         },
       ],
@@ -174,12 +175,14 @@ test('informational reviewer artifacts omit stable finding IDs', () => {
           schema: 'review.finding/v1',
           id: 'Q12',
           body: 'First actionable finding.',
+          severity: 'medium',
           placement: { kind: 'general' },
         },
         {
           schema: 'review.finding/v1',
           id: 'Q13',
           body: 'Second actionable finding.',
+          severity: 'low',
           placement: { kind: 'general' },
         },
         {
@@ -223,6 +226,49 @@ test('informational reviewer artifacts omit stable finding IDs', () => {
       ),
     /informational review artifact id must be omitted/,
   );
+});
+
+test('actionable findings require id, severity, and placement while informational artifacts do not', () => {
+  const complete = {
+    ...envelope,
+    message_id: 'message-complete-finding-contract',
+    output: {
+      ...envelope.output,
+      result: 'changes_requested',
+      artifacts: [
+        {
+          schema: 'review.finding/v1',
+          id: 'Q21',
+          body: 'The actionable contract must be complete.',
+          severity: 'high',
+          placement: { kind: 'general' },
+        },
+      ],
+    },
+  };
+  assert.doesNotThrow(() => validateEnvelope(complete, { ...context, role: 'qa' }));
+
+  for (const field of ['id', 'severity', 'placement']) {
+    const malformed = structuredClone(complete);
+    delete malformed.output.artifacts[0][field];
+    assert.throws(
+      () => validateEnvelope(malformed, { ...context, role: 'qa' }),
+      new RegExp(`(?:required field missing.*${field}|finding ${field} is required)`),
+    );
+  }
+
+  const informational = {
+    ...envelope,
+    message_id: 'message-informational-optional-fields',
+    output: {
+      ...envelope.output,
+      artifacts: [
+        { schema: 'review.summary/v1', body: 'Summary without lifecycle or routing fields.' },
+        { schema: 'review.evidence/v1', body: 'Evidence without lifecycle or routing fields.' },
+      ],
+    },
+  };
+  assert.doesNotThrow(() => validateEnvelope(informational, { ...context, role: 'qa' }));
 });
 
 test('Worker resolution references must exist in persisted reviewer findings', () => {
