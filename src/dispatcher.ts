@@ -956,13 +956,17 @@ function rolePrompt(
   headSha: string | undefined,
   runId: string,
   initialPrBody?: string,
+  dispatcherContext?: EnvelopeValidationContext,
 ): string {
   const issueContext = issue.body?.trim() || '(issue body unavailable; inspect it with gh)';
+  const exactContext = dispatcherContext
+    ? `Dispatcher-issued envelope context (copy every supplied value exactly; placeholders such as "unknown" are invalid):\n${JSON.stringify(dispatcherContext)}\n`
+    : '';
   if (role === 'worker')
-    return `Use the worker skill for GitHub issue #${issue.number}: ${issue.title}. This is dispatcher recovery run ${runId}, review round ${round}. Continue the existing task in the current checkout. ${pr ? `An existing PR is #${pr}; update that PR and never create a second PR.` : 'Create exactly one PR targeting staging if one does not exist.'} Do not merge. The claimed issue number is ${issue.number} (also in LLMCHAT_ISSUE_NUMBER). The dispatcher has generated the initial PR body in LLMCHAT_PR_BODY: ${JSON.stringify(initialPrBody ?? '')}. If creating a PR, pass that exact value to gh pr create using --body-file (or an equivalent file-based body argument); do not construct the closing reference yourself. When updating the PR, preserve every state-authorized closing reference supplied in the recovery context exactly once; do not add or remove other issue links without dispatcher instruction. Use gh pr create/edit (or equivalent) to persist that body. Inspect the issue, current PR diff, CI checks, mergeability, and all [QA/SDET Review] and [Staff Review] feedback. If the PR is CONFLICTING or DIRTY against staging, update the branch from staging, resolve every conflict, run the required checks, and do not report ready_for_review until the PR is clean and mergeable. Resolve every actionable finding. Do not publish GitHub review, evidence, or Worker comments: return exactly one llmchat.agent-output/v1 envelope as your final result; the dispatcher owns all publication. Include the structured human-verification guide in that envelope. Never delete or modify .llmchat/state.json or dispatcher runtime state. Exit 0 only after the work, conflict resolution, and PR update are complete; do not return Markdown evidence. Issue body:\n${issueContext}\n${context ? `Recovered context:\n${context}\n` : ''}${feedback ? `Actionable feedback to resolve:\n${feedback}\n` : ''}`;
+    return `Use the worker skill for GitHub issue #${issue.number}: ${issue.title}. This is dispatcher recovery run ${runId}, review round ${round}. Continue the existing task in the current checkout. ${pr ? `An existing PR is #${pr}; update that PR and never create a second PR.` : 'Create exactly one PR targeting staging if one does not exist.'} Do not merge. The claimed issue number is ${issue.number} (also in LLMCHAT_ISSUE_NUMBER). The dispatcher has generated the initial PR body in LLMCHAT_PR_BODY: ${JSON.stringify(initialPrBody ?? '')}. If creating a PR, pass that exact value to gh pr create using --body-file (or an equivalent file-based body argument); do not construct the closing reference yourself. When updating the PR, preserve every state-authorized closing reference supplied in the recovery context exactly once; do not add or remove other issue links without dispatcher instruction. Use gh pr create/edit (or equivalent) to persist that body. Inspect the issue, current PR diff, CI checks, mergeability, and all [QA/SDET Review] and [Staff Review] feedback. If the PR is CONFLICTING or DIRTY against staging, update the branch from staging, resolve every conflict, run the required checks, and do not report ready_for_review until the PR is clean and mergeable. Resolve every actionable finding. Do not publish GitHub review, evidence, or Worker comments: return exactly one llmchat.agent-output/v1 envelope as your final result; the dispatcher owns all publication. Include the structured human-verification guide in that envelope. ${exactContext}Return the resulting PR number and full post-work head commit in the remaining context fields. Never delete or modify .llmchat/state.json or dispatcher runtime state. Exit 0 only after the work, conflict resolution, and PR update are complete; do not return Markdown evidence. Issue body:\n${issueContext}\n${context ? `Recovered context:\n${context}\n` : ''}${feedback ? `Actionable feedback to resolve:\n${feedback}\n` : ''}`;
   if (role === 'qa')
-    return `Use the qa-sdet skill for GitHub issue #${issue.number}: ${issue.title}. Review PR #${pr} against staging before Staff. Current head is ${headSha ?? 'unknown'} and this is review round ${round}. Inspect the acceptance criteria, diff, CI check results, regression coverage, and smoke evidence. Do not publish directly to GitHub. Return exactly one llmchat.agent-output/v1 envelope using the supplied reviewer schema, with typed findings, notes, summary, evidence, and dispositions. Do not edit code or merge. Exit 0 after returning the structured envelope. Issue body:\n${issueContext}`;
-  return `Use the staff-reviewer skill for GitHub issue #${issue.number}: ${issue.title}. Review PR #${pr} against staging after QA has passed. Current head is ${headSha ?? 'unknown'} and this is review round ${round}. Perform the independent adversarial review for design, security, regressions, boundaries, and abuse cases. Do not publish directly to GitHub. Return exactly one llmchat.agent-output/v1 envelope using the supplied reviewer schema, with typed findings, notes, summary, evidence, and dispositions. Do not edit code or merge. Exit 0 after returning the structured envelope. Issue body:\n${issueContext}`;
+    return `Use the qa-sdet skill for GitHub issue #${issue.number}: ${issue.title}. Review PR #${pr} against staging before Staff. Current head is ${headSha ?? 'unknown'} and this is review round ${round}. ${exactContext}The same machine-readable JSON is available in LLMCHAT_AGENT_CONTEXT and enforced as constants by the supplied Codex schema. Inspect the acceptance criteria, diff, CI check results, regression coverage, and smoke evidence. Do not publish directly to GitHub. Return exactly one llmchat.agent-output/v1 envelope using the supplied reviewer schema, with typed findings, notes, summary, evidence, and dispositions. Do not edit code or merge. Exit 0 after returning the structured envelope. Issue body:\n${issueContext}`;
+  return `Use the staff-reviewer skill for GitHub issue #${issue.number}: ${issue.title}. Review PR #${pr} against staging after QA has passed. Current head is ${headSha ?? 'unknown'} and this is review round ${round}. ${exactContext}The same machine-readable JSON is available in LLMCHAT_AGENT_CONTEXT and enforced as constants by the supplied Codex schema. Perform the independent adversarial review for design, security, regressions, boundaries, and abuse cases. Do not publish directly to GitHub. Return exactly one llmchat.agent-output/v1 envelope using the supplied reviewer schema, with typed findings, notes, summary, evidence, and dispositions. Do not edit code or merge. Exit 0 after returning the structured envelope. Issue body:\n${issueContext}`;
 }
 
 function roleCommand(value: Command | undefined, issue: number, cfg: Config): Spec | undefined {
@@ -1275,9 +1279,32 @@ export function assertCodexStructuredOutputsSchema(schema: JsonSchema): void {
 export function codexResponseSchema(
   envelopeSchema: JsonSchema,
   outputSchema: JsonSchema,
+  role?: 'worker' | 'qa' | 'staff',
+  expectedContext: EnvelopeValidationContext = {},
 ): JsonSchema {
   const envelope = structuredClone(envelopeSchema);
   const properties = schemaObject(envelope.properties, 'agent envelope properties');
+  if (role) {
+    const producer = schemaObject(properties.producer, 'agent envelope producer');
+    const producerProperties = schemaObject(
+      producer.properties,
+      'agent envelope producer properties',
+    );
+    producerProperties.role = {
+      ...schemaObject(producerProperties.role, 'agent envelope producer role'),
+      const: role,
+    };
+  }
+  const context = schemaObject(properties.context, 'agent envelope context');
+  const contextProperties = schemaObject(context.properties, 'agent envelope context properties');
+  for (const key of ['run_id', 'issue', 'pr', 'round', 'commit', 'feedback_cursor'] as const) {
+    const value = expectedContext[key];
+    if (value !== undefined)
+      contextProperties[key] = {
+        ...schemaObject(contextProperties[key], `agent envelope context ${key}`),
+        const: value,
+      };
+  }
   const output = schemaObject(properties.output, 'agent envelope output');
   const outputId = outputSchema.$id;
   if (typeof outputId !== 'string' || output.$ref !== outputId)
@@ -1391,9 +1418,16 @@ function canonicalCodexResponse(value: unknown, role: 'worker' | 'qa' | 'staff')
   return canonicalCodexValue(value, envelope, new Map([[outputId, output]]));
 }
 
-function structuredRoleSpec(spec: Spec, role: 'worker' | 'qa' | 'staff', runId: string): Spec {
+function structuredRoleSpec(
+  spec: Spec,
+  role: 'worker' | 'qa' | 'staff',
+  runId: string,
+  expectedContext: EnvelopeValidationContext = {},
+): Spec {
   if (!/^(?:.*[\\/])?codex(?:\.cmd|\.exe)?$/i.test(spec.command) || spec.args[0] !== 'exec')
     return spec;
+  if (expectedContext.run_id !== undefined && expectedContext.run_id !== runId)
+    throw new Error('Codex response schema run_id must match the output path run');
   const runDir = join(root, '.llmchat', 'runs', runId);
   mkdirSync(runDir, { recursive: true });
   const lastMessage = join(runDir, `${role}.json`);
@@ -1407,6 +1441,8 @@ function structuredRoleSpec(spec: Spec, role: 'worker' | 'qa' | 'staff', runId: 
         codexResponseSchema(
           loadRoleSchema(`${rolePrefix}-agent-output-v1.json`),
           loadRoleSchema(`${rolePrefix}-output-v1.json`),
+          role,
+          expectedContext,
         ),
         null,
         2,
@@ -2103,6 +2139,13 @@ async function runWorker(
   const before = pr && d.pullRequest && d.load().headSha ? await d.pullRequest(pr) : undefined;
   if (before && d.pullRequest) ingestHumanFeedback(d, before, issue.number);
   const feedbackCursorBefore = humanFeedbackCursor(d.load());
+  const dispatcherContext: EnvelopeValidationContext = {
+    run_id: runId,
+    issue: issue.number,
+    round,
+    feedback_cursor: feedbackCursorBefore,
+    ...(pr ? { pr } : {}),
+  };
   const initialPrBody = withIssueClosingReference(
     '',
     issue.number,
@@ -2129,10 +2172,12 @@ async function runWorker(
             d.load().headSha,
             runId,
             initialPrBody,
+            dispatcherContext,
           ),
         },
         'worker',
         runId,
+        dispatcherContext,
       ),
       issue.number,
       runId,
@@ -2143,9 +2188,7 @@ async function runWorker(
     'worker',
     {
       ...findingState(d.load(), 'worker'),
-      run_id: runId,
-      issue: issue.number,
-      round,
+      ...dispatcherContext,
     },
     output,
   );
@@ -2268,10 +2311,22 @@ async function runReview(
   const runId = d.load().workerRunId ?? randomUUID();
   if (d.pullRequest) ingestHumanFeedback(d, await d.pullRequest(prNumber), issue.number);
   const feedbackCursorBefore = humanFeedbackCursor(d.load());
+  const dispatcherContext: EnvelopeValidationContext = {
+    run_id: runId,
+    issue: issue.number,
+    pr: prNumber,
+    round,
+    commit,
+    feedback_cursor: feedbackCursorBefore,
+  };
   const output = await d.run(
     structuredRoleSpec(
       {
         ...spec,
+        env: {
+          ...spec.env,
+          LLMCHAT_AGENT_CONTEXT: JSON.stringify(dispatcherContext),
+        },
         input: rolePrompt(
           issue,
           role,
@@ -2281,10 +2336,13 @@ async function runReview(
           role === 'qa' ? (d.load().lastQaFeedback ?? '') : (d.load().lastStaffFeedback ?? ''),
           evidence.headRefOid,
           d.load().workerRunId ?? 'dispatcher-run',
+          undefined,
+          dispatcherContext,
         ),
       },
       role,
       runId,
+      dispatcherContext,
     ),
   );
   const structured = readStructuredOutput(
@@ -2292,11 +2350,7 @@ async function runReview(
     role,
     {
       ...findingState(d.load(), role),
-      run_id: runId,
-      issue: issue.number,
-      pr: prNumber,
-      round,
-      commit,
+      ...dispatcherContext,
     },
     output,
   );

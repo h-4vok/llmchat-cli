@@ -54,6 +54,22 @@ function assertCodexRootReferences(schema) {
   visit(schema);
 }
 
+function dispatcherContext(spec) {
+  const match = spec.input?.match(/Dispatcher-issued envelope context \([^\n]+\):\n(\{[^\n]+\})\n/);
+  assert.ok(match, 'role prompt must contain dispatcher-issued context JSON');
+  const promptContext = JSON.parse(match[1]);
+  if (spec.env?.LLMCHAT_AGENT_CONTEXT)
+    assert.deepEqual(JSON.parse(spec.env.LLMCHAT_AGENT_CONTEXT), promptContext);
+  return promptContext;
+}
+
+function roleOfRun(spec) {
+  if (spec.input?.includes('Use the worker skill')) return 'worker';
+  if (spec.input?.includes('Use the qa-sdet skill')) return 'qa';
+  if (spec.input?.includes('Use the staff-reviewer skill')) return 'staff';
+  return 'unknown';
+}
+
 test('production GitHub publication adapters target replies, thread resolution, and reactions', () => {
   assert.deepEqual(githubReplyRequest('owner/repo', 50, '123', 'reply'), [
     'api',
@@ -260,13 +276,6 @@ function harness(
   const checkSequences = overrides.checkSequences ?? [pr.statusCheckRollup];
   let checkIndex = 0;
 
-  const roleOf = (spec) => {
-    if (spec.input?.includes('Use the worker skill')) return 'worker';
-    if (spec.input?.includes('Use the qa-sdet skill')) return 'qa';
-    if (spec.input?.includes('Use the staff-reviewer skill')) return 'staff';
-    return 'unknown';
-  };
-
   const deps = {
     root,
     load: () => state,
@@ -278,7 +287,7 @@ function harness(
     comment: (issue, body) => comments.push([issue, body]),
     run: async (spec) => {
       runs.push(spec);
-      const role = roleOf(spec);
+      const role = roleOfRun(spec);
       const round = Number(spec.input?.match(/review round (\d+)/)?.[1] ?? 1);
       if (role === 'worker') {
         workerCount += 1;
@@ -375,6 +384,7 @@ function harness(
       reactions.push({ number, commentId, source, reaction });
       overrides.onReact?.({ number, commentId, source, reaction });
     },
+    reviewDiff: overrides.reviewDiff,
     now: () => Date.now(),
     pid: () => process.pid,
     processAlive: (pid) => pid > 0 && pid !== -1,
@@ -665,18 +675,15 @@ test('dispatcher preserves feedback source when selecting reaction endpoints', a
 
 test('valid structured Worker output is dispatcher-published without role-authored evidence', async () => {
   const h = harness([{ number: 1, title: 'a' }], {
-    structuredWorkerOutput: ({ runId, commit }) =>
+    structuredWorkerOutput: ({ spec, commit }) =>
       `<<<llmchat.agent-output/v1>>>\n${JSON.stringify({
         schema: 'llmchat.agent-output/v1',
         message_id: 'worker-structured-1',
         producer: { role: 'worker' },
         context: {
-          run_id: runId,
-          issue: 1,
+          ...dispatcherContext(spec),
           pr: 14,
-          round: 1,
           commit,
-          feedback_cursor: 'cursor-1',
         },
         output: {
           schema: 'llmchat.worker-output/v1',
@@ -705,7 +712,7 @@ test('valid structured Worker output is dispatcher-published without role-author
 
 test('dispatcher accepts a Codex output file produced with its checked-in schema', async () => {
   const h = harness([{ number: 1, title: 'a' }], {
-    structuredWorkerOutput: ({ spec, runId, commit }) => {
+    structuredWorkerOutput: ({ spec, commit }) => {
       const schemaPath = spec.args[spec.args.indexOf('--output-schema') + 1];
       const schema = JSON.parse(readFileSync(schemaPath, 'utf8'));
       assert.equal(schema.properties.schema.type, 'string');
@@ -718,12 +725,9 @@ test('dispatcher accepts a Codex output file produced with its checked-in schema
           message_id: 'worker-output-file-1',
           producer: { role: 'worker' },
           context: {
-            run_id: runId,
-            issue: 1,
+            ...dispatcherContext(spec),
             pr: 14,
-            round: 1,
             commit,
-            feedback_cursor: 'cursor-1',
           },
           output: {
             schema: 'llmchat.worker-output/v1',
@@ -762,18 +766,15 @@ test('dispatcher decodes Codex nullable fields and map entries before canonical 
   const commit = '0123456789abcdef0123456789abcdef01234567';
   const h = harness([{ number: 1, title: 'a' }], {
     publishEvidence: { qa: false, staff: false },
-    structuredWorkerOutput: ({ runId }) =>
+    structuredWorkerOutput: ({ spec, commit }) =>
       `<<<llmchat.agent-output/v1>>>\n${JSON.stringify({
         schema: 'llmchat.agent-output/v1',
         message_id: 'worker-before-codex-reviewer',
         producer: { role: 'worker' },
         context: {
-          run_id: runId,
-          issue: 1,
+          ...dispatcherContext(spec),
           pr: 14,
-          round: 1,
           commit,
-          feedback_cursor: 'cursor-1',
         },
         output: {
           schema: 'llmchat.worker-output/v1',
@@ -792,22 +793,16 @@ test('dispatcher decodes Codex nullable fields and map entries before canonical 
       })}\n<<<end llmchat.agent-output/v1>>>`,
     structuredReviewerOutput: ({ spec, role, round, commit: reviewedCommit }) => {
       const outputPath = spec.args[spec.args.indexOf('--output-last-message') + 1];
-      const runId = outputPath.match(/[\\/]runs[\\/]([^\\/]+)[\\/]/)?.[1];
-      assert.ok(runId);
+      const expectedContext = dispatcherContext(spec);
+      assert.equal(expectedContext.round, round);
+      assert.equal(expectedContext.commit, reviewedCommit);
       writeFileSync(
         outputPath,
         JSON.stringify({
           schema: 'llmchat.agent-output/v1',
           message_id: `${role}-codex-transport`,
           producer: { role },
-          context: {
-            run_id: runId,
-            issue: 1,
-            pr: 14,
-            round,
-            commit: reviewedCommit,
-            feedback_cursor: 'cursor-1',
-          },
+          context: expectedContext,
           output: {
             schema: 'llmchat.reviewer-output/v1',
             result: 'accepted',
@@ -941,18 +936,15 @@ test('structured Worker output is preserved as stale and rerun after a PR head c
     workerDuringRun: ({ pr, workerCount }) => {
       if (workerCount === 1) pr.headRefOid = changedCommit;
     },
-    structuredWorkerOutput: ({ runId, commit }) =>
+    structuredWorkerOutput: ({ spec, commit }) =>
       `<<<llmchat.agent-output/v1>>>\n${JSON.stringify({
         schema: 'llmchat.agent-output/v1',
         message_id: `worker-freshness-${commit}`,
         producer: { role: 'worker' },
         context: {
-          run_id: runId,
-          issue: 1,
+          ...dispatcherContext(spec),
           pr: 14,
-          round: 1,
           commit,
-          feedback_cursor: 'cursor-1',
         },
         output: {
           schema: 'llmchat.worker-output/v1',
@@ -994,6 +986,7 @@ test('Codex roles receive full envelope schemas and publication-owned prompts', 
   assert.match(qa.args.join(' '), /qa-response-schema\.json/);
   assert.match(staff.args.join(' '), /staff-response-schema\.json/);
   for (const run of [worker, qa, staff]) {
+    const suppliedContext = dispatcherContext(run);
     const schemaPath = run.args[run.args.indexOf('--output-schema') + 1];
     const schema = JSON.parse(readFileSync(schemaPath, 'utf8'));
     assert.equal(schema.properties.schema.type, 'string');
@@ -1003,8 +996,99 @@ test('Codex roles receive full envelope schemas and publication-owned prompts', 
       schema.$defs.output.properties.schema.const,
       run === worker ? 'llmchat.worker-output/v1' : 'llmchat.reviewer-output/v1',
     );
+    assert.equal(schema.properties.producer.properties.role.const, roleOfRun(run));
+    for (const [key, value] of Object.entries(suppliedContext))
+      assert.equal(schema.properties.context.properties[key].const, value);
     assert.match(run.input, /return exactly one llmchat\.agent-output\/v1 envelope/i);
     assert.match(run.input, /Do not publish directly to GitHub|Do not publish GitHub/);
+  }
+  for (const reviewer of [qa, staff]) {
+    const suppliedContext = dispatcherContext(reviewer);
+    assert.deepEqual(Object.keys(suppliedContext).sort(), [
+      'commit',
+      'feedback_cursor',
+      'issue',
+      'pr',
+      'round',
+      'run_id',
+    ]);
+    assert.notEqual(suppliedContext.run_id, 'unknown');
+    assert.notEqual(suppliedContext.feedback_cursor, 'unknown');
+    assert.match(reviewer.input, /placeholders such as "unknown" are invalid/);
+  }
+});
+
+test('QA and Staff reject unknown run IDs and feedback cursors instead of publishing', async () => {
+  const validWorker = ({ spec, commit }) =>
+    `<<<llmchat.agent-output/v1>>>\n${JSON.stringify({
+      schema: 'llmchat.agent-output/v1',
+      message_id: 'worker-reviewer-context-regression',
+      producer: { role: 'worker' },
+      context: { ...dispatcherContext(spec), pr: 14, commit },
+      output: {
+        schema: 'llmchat.worker-output/v1',
+        status: 'ready_for_review',
+        resolutions: [],
+        evidence: ['Prepared deterministic reviewer context validation.'],
+        human_verification: {
+          summary: 'Verify reviewer context propagation.',
+          steps: ['Run the focused dispatcher regression.'],
+          expected: ['Unknown reviewer context is rejected without publication.'],
+          isolation: 'Use the credential-free dispatcher harness.',
+          limitations: ['No remote Codex process is invoked.'],
+          checklist: ['Confirm both run ID and feedback cursor checks.'],
+        },
+      },
+    })}\n<<<end llmchat.agent-output/v1>>>`;
+
+  for (const targetRole of ['qa', 'staff']) {
+    for (const field of ['run_id', 'feedback_cursor']) {
+      const invalidMessageId = `${targetRole}-unknown-${field}`;
+      const h = harness([{ number: 1, title: 'a' }], {
+        publishEvidence: { qa: false, staff: false },
+        reviewDiff: () => [],
+        structuredWorkerOutput: validWorker,
+        structuredReviewerOutput: ({ spec, role }) => {
+          const expectedContext = dispatcherContext(spec);
+          const outputPath = spec.args[spec.args.indexOf('--output-last-message') + 1];
+          writeFileSync(
+            outputPath,
+            JSON.stringify({
+              schema: 'llmchat.agent-output/v1',
+              message_id: role === targetRole ? invalidMessageId : `${role}-valid-context`,
+              producer: { role },
+              context:
+                role === targetRole ? { ...expectedContext, [field]: 'unknown' } : expectedContext,
+              output: {
+                schema: 'llmchat.reviewer-output/v1',
+                result: 'accepted',
+                summary: `${role} context validation fixture.`,
+                evidence: ['Credential-free structured output fixture.'],
+                artifacts: [],
+                dispositions: [],
+              },
+            }),
+          );
+          return `${role} visible stream`;
+        },
+      });
+
+      await dispatch(h.cfg, h.deps);
+      assert.match(h.state().lastErrorVerbose, new RegExp(`agent context mismatch: ${field}`));
+
+      const targetRun = h.runs.find((run) => roleOfRun(run) === targetRole);
+      const suppliedContext = dispatcherContext(targetRun);
+      const schemaPath = targetRun.args[targetRun.args.indexOf('--output-schema') + 1];
+      const schema = JSON.parse(readFileSync(schemaPath, 'utf8'));
+      assert.equal(schema.properties.context.properties[field].const, suppliedContext[field]);
+      assert.notEqual(suppliedContext[field], 'unknown');
+      assert.equal(h.state().agentEnvelopes?.[invalidMessageId], undefined);
+      const targetMarker = targetRole === 'qa' ? '[QA/SDET Review]' : '[Staff Review]';
+      assert.equal(
+        h.deps.pullRequest(14).comments.some((comment) => comment.body?.startsWith(targetMarker)),
+        false,
+      );
+    }
   }
 });
 
