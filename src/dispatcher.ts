@@ -144,6 +144,7 @@ type Deps = {
   updatePullRequestBody?: (pr: number, body: string) => void | Promise<void>;
   pullRequestBody?: (pr: number) => string | Promise<string>;
   prComment?: (pr: number, body: string) => void | Promise<void>;
+  publishReview?: (pr: number, body: string) => void | Promise<void>;
 };
 type Spec = {
   command: string;
@@ -377,6 +378,16 @@ function updatePullRequestBody(pr: number, body: string): void {
 
 function commentPullRequest(pr: number, body: string): void {
   gh(['pr', 'comment', String(pr), '--body', body]);
+}
+
+function publishPullRequestReview(pr: number, body: string): void {
+  const temp = join(tmpdir(), `llmchat-review-${process.pid}-${Date.now()}.md`);
+  try {
+    writeFileSync(temp, body, 'utf8');
+    gh(['pr', 'review', String(pr), '--comment', '--body-file', temp]);
+  } finally {
+    rmSync(temp, { force: true });
+  }
 }
 
 function commentIssueOnce(issue: number, body: string): void {
@@ -640,8 +651,23 @@ function rolePrompt(
   if (role === 'worker')
     return `Use the worker skill for GitHub issue #${issue.number}: ${issue.title}. This is dispatcher recovery run ${runId}, review round ${round}. Continue the existing task in the current checkout. ${pr ? `An existing PR is #${pr}; update that PR and never create a second PR.` : 'Create exactly one PR targeting staging if one does not exist.'} Do not merge. The claimed issue number is ${issue.number} (also in LLMCHAT_ISSUE_NUMBER). The dispatcher has generated the initial PR body in LLMCHAT_PR_BODY: ${JSON.stringify(initialPrBody ?? '')}. If creating a PR, pass that exact value to gh pr create using --body-file (or an equivalent file-based body argument); do not construct the closing reference yourself. When updating the PR, preserve every state-authorized closing reference supplied in the recovery context exactly once; do not add or remove other issue links without dispatcher instruction. Use gh pr create/edit (or equivalent) to persist that body. Inspect the issue, current PR diff, CI checks, mergeability, and all [QA/SDET Review] and [Staff Review] feedback. If the PR is CONFLICTING or DIRTY against staging, update the branch from staging, resolve every conflict, run the required checks, and do not report ready_for_review until the PR is clean and mergeable. Resolve every actionable finding and publish one PR conversation comment beginning with [Worker], including round=${round}, status=ready_for_review, pr=<number>, base=staging, and commit=<current head SHA>. In that evidence include a [Human Verification] JSON code block with non-empty summary, steps, expected, isolation, limitations, and checklist fields. Make the steps concrete, safe, and isolated; state diagnostics for failures; do not claim automated checks that were not run. The dispatcher will validate and publish the guide only after CI, QA, and Staff pass. Never delete or modify .llmchat/state.json or dispatcher runtime state. Exit 0 only after the work, conflict resolution, and comment are complete; do not return JSON. Issue body:\n${issueContext}\n${context ? `Recovered context:\n${context}\n` : ''}${feedback ? `Actionable feedback to resolve:\n${feedback}\n` : ''}At the end, print a plain-text line exactly like WORKER_RESULT pr=<number> base=staging. All command success/failure is communicated by the process exit code.`;
   if (role === 'qa')
-    return `Use the qa-sdet skill for GitHub issue #${issue.number}: ${issue.title}. Review PR #${pr} against staging before Staff. Current head is ${headSha ?? 'unknown'} and this is review round ${round}. Inspect the acceptance criteria, diff, CI check results, regression coverage, and smoke evidence. Publish directly to the PR exactly one review beginning [QA/SDET Review] round=${round} verdict=passed, changes_requested, or blocked. Include Q<n> findings, exact evidence, and commit=${headSha ?? 'current'}. Do not edit code or merge. Exit 0 after publishing the review; do not return JSON. Issue body:\n${issueContext}`;
-  return `Use the staff-reviewer skill for GitHub issue #${issue.number}: ${issue.title}. Review PR #${pr} against staging after QA has passed. Current head is ${headSha ?? 'unknown'} and this is review round ${round}. Perform the independent adversarial review for design, security, regressions, boundaries, and abuse cases. Publish directly to the PR exactly one review beginning [Staff Review] round=${round} verdict=approved or changes_requested, include S<n> findings when needed, and include commit=${headSha ?? 'current'}. Do not edit code or merge. Exit 0 after publishing the review; do not return JSON. Issue body:\n${issueContext}`;
+    return `Use the qa-sdet skill for GitHub issue #${issue.number}: ${issue.title}. Review PR #${pr} against staging before Staff. Current head is ${headSha ?? 'unknown'} and this is review round ${round}. Inspect the acceptance criteria, diff, CI check results, regression coverage, and smoke evidence. Return exactly one review body between LLMCHAT_REVIEW_BEGIN and LLMCHAT_REVIEW_END. It must begin [QA/SDET Review] round=${round} verdict=passed, changes_requested, or blocked, include Q<n> findings, exact evidence, and commit=${headSha ?? 'current'}. Do not use gh, publish, edit code, or merge. Issue body:\n${issueContext}`;
+  return `Use the staff-reviewer skill for GitHub issue #${issue.number}: ${issue.title}. Review PR #${pr} against staging after QA has passed. Current head is ${headSha ?? 'unknown'} and this is review round ${round}. Perform the independent adversarial review for design, security, regressions, boundaries, and abuse cases. Return exactly one review body between LLMCHAT_REVIEW_BEGIN and LLMCHAT_REVIEW_END. It must begin [Staff Review] round=${round} verdict=approved or changes_requested, include S<n> findings when needed, and include commit=${headSha ?? 'current'}. Do not use gh, publish, edit code, or merge. Issue body:\n${issueContext}`;
+}
+
+export function parseRoleReviewOutput(
+  output: string,
+  marker: '[QA/SDET Review]' | '[Staff Review]',
+  round: number,
+  headSha?: string,
+): string {
+  const match = output.match(/LLMCHAT_REVIEW_BEGIN\s*\r?\n([\s\S]*?)\r?\nLLMCHAT_REVIEW_END/);
+  if (!match) throw new Error('role output did not contain a delimited review body');
+  const body = match[1].trim();
+  if (!body.startsWith(marker) || roundFromBody(body) !== round || !hasCommit(body, headSha))
+    throw new Error(`role review must begin ${marker} with round=${round} and the current commit`);
+  if (!reviewVerdict(body)) throw new Error('role review must include a verdict');
+  return body;
 }
 
 function roleCommand(value: Command | undefined, issue: number, cfg: Config): Spec | undefined {
@@ -1063,7 +1089,7 @@ async function runReview(
   if (!configured) throw new Error(`${role} command is required`);
   const spec = roleCommand(configured, issue.number, cfg);
   if (!spec) throw new Error(`${role} command is required`);
-  await d.run({
+  const output = await d.run({
     ...spec,
     input: rolePrompt(
       issue,
@@ -1076,6 +1102,11 @@ async function runReview(
       d.load().workerRunId ?? 'dispatcher-run',
     ),
   });
+  const body = parseRoleReviewOutput(output, marker, round, evidence.headRefOid);
+  if (!d.pullRequest) throw new Error('GitHub PR evidence adapter is required');
+  const existing = await d.pullRequest(prNumber);
+  if (!latestReview(existing, marker, round, evidence.headRefOid))
+    await (d.publishReview ?? publishPullRequestReview)(prNumber, body);
   const latest = await waitForEvidence(d, cfg, prNumber, (candidate) =>
     Boolean(latestReview(candidate, marker, round, candidate.headRefOid)),
   );
@@ -1690,6 +1721,7 @@ async function main() {
     run: runCommand,
     pullRequest,
     prComment: commentPullRequest,
+    publishReview: publishPullRequestReview,
     now: Date.now,
     pid: () => process.pid,
     processAlive: defaultProcessAlive,

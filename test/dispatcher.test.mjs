@@ -19,7 +19,24 @@ import {
   withIssueClosingReference,
   resetRunState,
   runCommand,
+  parseRoleReviewOutput,
 } from '../dist/dispatcher.js';
+
+test('role review output requires the dispatcher delimiter and matching metadata', () => {
+  const body = '[QA/SDET Review] round=2 verdict=passed commit=abc123\nNo findings.';
+  assert.equal(
+    parseRoleReviewOutput(`LLMCHAT_REVIEW_BEGIN\n${body}\nLLMCHAT_REVIEW_END`, '[QA/SDET Review]', 2, 'abc123'),
+    body,
+  );
+  assert.throws(
+    () => parseRoleReviewOutput(body, '[QA/SDET Review]', 2, 'abc123'),
+    /delimited review body/,
+  );
+  assert.throws(
+    () => parseRoleReviewOutput(`LLMCHAT_REVIEW_BEGIN\n${body.replace('round=2', 'round=1')}\nLLMCHAT_REVIEW_END`, '[QA/SDET Review]', 2, 'abc123'),
+    /matching commit|round=2/,
+  );
+});
 
 test('Windows batch commands use cmd.exe without Node shell mode', () => {
   assert.deepEqual(
@@ -221,28 +238,14 @@ function harness(
       if (role === 'qa') {
         qaCount += 1;
         const verdict = qaVerdicts[qaCount - 1] ?? qaVerdicts.at(-1);
-        if (publishEvidence.qa)
-          reviews.push({
-            body:
-              qaBodies?.[qaCount - 1] ??
-              `[QA/SDET Review] round=${round} verdict=${verdict} commit=${pr.headRefOid}`,
-            commitId: pr.headRefOid,
-            submittedAt: `${qaCount}`,
-          });
-        return 'QA completed';
+        return `LLMCHAT_REVIEW_BEGIN\n${qaBodies?.[qaCount - 1] ??
+          `[QA/SDET Review] round=${round} verdict=${verdict} commit=${pr.headRefOid}`}\nLLMCHAT_REVIEW_END`;
       }
       if (role === 'staff') {
         staffCount += 1;
         const verdict = staffVerdicts[staffCount - 1] ?? staffVerdicts.at(-1);
-        if (publishEvidence.staff)
-          reviews.push({
-            body:
-              staffBodies?.[staffCount - 1] ??
-              `[Staff Review] round=${round} verdict=${verdict} commit=${pr.headRefOid}`,
-            commitId: pr.headRefOid,
-            submittedAt: `${staffCount}`,
-          });
-        return 'Staff completed';
+        return `LLMCHAT_REVIEW_BEGIN\n${staffBodies?.[staffCount - 1] ??
+          `[Staff Review] round=${round} verdict=${verdict} commit=${pr.headRefOid}`}\nLLMCHAT_REVIEW_END`;
       }
       return 'completed';
     },
@@ -256,6 +259,11 @@ function harness(
       prBodyUpdates.push({ number, body });
     },
     pullRequestBody: () => pr.body,
+    publishReview: async (number, body) => {
+      if ((body.startsWith('[QA/SDET Review]') && !publishEvidence.qa) ||
+          (body.startsWith('[Staff Review]') && !publishEvidence.staff)) return;
+      reviews.push({ body, commitId: pr.headRefOid, submittedAt: `${reviews.length + 1}` });
+    },
     now: () => Date.now(),
     pid: () => process.pid,
     processAlive: (pid) => pid > 0 && pid !== -1,
