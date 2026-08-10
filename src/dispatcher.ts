@@ -493,6 +493,103 @@ function commentPullRequest(pr: number, body: string): string {
   return gh(['pr', 'comment', String(pr), '--body', body]);
 }
 
+function repositoryName(): string {
+  return ghJson<{ nameWithOwner: string }>(['repo', 'view', '--json', 'nameWithOwner'])
+    .nameWithOwner;
+}
+
+export function githubReplyRequest(
+  repo: string,
+  pr: number,
+  commentId: string,
+  body: string,
+): string[] {
+  return [
+    'api',
+    `repos/${repo}/pulls/${pr}/comments`,
+    '--method',
+    'POST',
+    '-f',
+    `body=${body}`,
+    '-F',
+    `in_reply_to=${commentId}`,
+  ];
+}
+
+export function githubReactionRequest(repo: string, commentId: string, reaction: string): string[] {
+  return [
+    'api',
+    `repos/${repo}/issues/comments/${commentId}/reactions`,
+    '--method',
+    'POST',
+    '-f',
+    `content=${reaction}`,
+  ];
+}
+
+export function githubReviewThreadLookupRequest(repo: string, pr: number): string[] {
+  const [owner, name] = repo.split('/', 2);
+  return [
+    'api',
+    'graphql',
+    '-f',
+    'query=query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){reviewThreads(first:100){nodes{id comments(first:100){nodes{databaseId}}}}}}}',
+    '-f',
+    `owner=${owner}`,
+    '-f',
+    `name=${name}`,
+    '-F',
+    `number=${pr}`,
+  ];
+}
+
+export function githubResolveReviewThreadRequest(threadId: string): string[] {
+  return [
+    'api',
+    'graphql',
+    '-f',
+    'query=mutation($threadId:ID!){resolveReviewThread(input:{threadId:$threadId}){thread{id isResolved}}}',
+    '-f',
+    `threadId=${threadId}`,
+  ];
+}
+
+function replyPullRequest(pr: number, commentId: string, body: string): string {
+  const repo = repositoryName();
+  const result = ghJson<{ id?: number; html_url?: string }>(
+    githubReplyRequest(repo, pr, commentId, body),
+  );
+  return result.html_url ?? (result.id ? String(result.id) : '');
+}
+
+function resolvePullRequestThread(pr: number, commentId: string): void {
+  const repo = repositoryName();
+  const lookup = ghJson<{
+    data?: {
+      repository?: {
+        pullRequest?: {
+          reviewThreads?: {
+            nodes?: Array<{
+              id: string;
+              comments?: { nodes?: Array<{ databaseId?: number | null }> };
+            }>;
+          };
+        };
+      };
+    };
+  }>(githubReviewThreadLookupRequest(repo, pr));
+  const thread = lookup.data?.repository?.pullRequest?.reviewThreads?.nodes?.find((node) =>
+    node.comments?.nodes?.some((comment) => String(comment.databaseId) === String(commentId)),
+  );
+  if (!thread) throw new Error(`review thread not found for comment ${commentId}`);
+  gh(githubResolveReviewThreadRequest(thread.id));
+}
+
+function reactToPullRequestComment(pr: number, commentId: string, reaction: string): void {
+  const repo = repositoryName();
+  gh(githubReactionRequest(repo, commentId, reaction));
+}
+
 function inlineCommentPullRequest(
   pr: number,
   body: string,
@@ -2541,6 +2638,9 @@ async function main() {
     pullRequest,
     prComment: commentPullRequest,
     prInlineComment: inlineCommentPullRequest,
+    prReply: replyPullRequest,
+    prResolve: resolvePullRequestThread,
+    prReact: reactToPullRequestComment,
     now: Date.now,
     pid: () => process.pid,
     processAlive: defaultProcessAlive,

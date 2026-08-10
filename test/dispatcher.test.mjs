@@ -18,6 +18,10 @@ import {
   command,
   dispatcherLockPath,
   dispatch,
+  githubReactionRequest,
+  githubReplyRequest,
+  githubResolveReviewThreadRequest,
+  githubReviewThreadLookupRequest,
   prepareWorkerBranch,
   prepareRecovery,
   recoverStaleLock,
@@ -28,6 +32,39 @@ import {
   resetRunState,
   runCommand,
 } from '../dist/dispatcher.js';
+
+test('production GitHub publication adapters target replies, thread resolution, and reactions', () => {
+  assert.deepEqual(githubReplyRequest('owner/repo', 50, '123', 'reply'), [
+    'api',
+    'repos/owner/repo/pulls/50/comments',
+    '--method',
+    'POST',
+    '-f',
+    'body=reply',
+    '-F',
+    'in_reply_to=123',
+  ]);
+  assert.match(
+    githubReviewThreadLookupRequest('owner/repo', 50).join(' '),
+    /reviewThreads\(first:100\)/,
+  );
+  assert.deepEqual(githubResolveReviewThreadRequest('PRRT_thread'), [
+    'api',
+    'graphql',
+    '-f',
+    'query=mutation($threadId:ID!){resolveReviewThread(input:{threadId:$threadId}){thread{id isResolved}}}',
+    '-f',
+    'threadId=PRRT_thread',
+  ]);
+  assert.deepEqual(githubReactionRequest('owner/repo', '123', 'eyes'), [
+    'api',
+    'repos/owner/repo/issues/comments/123/reactions',
+    '--method',
+    'POST',
+    '-f',
+    'content=eyes',
+  ]);
+});
 
 test('Windows batch commands use cmd.exe without Node shell mode', () => {
   assert.deepEqual(
