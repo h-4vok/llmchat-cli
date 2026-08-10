@@ -1140,6 +1140,65 @@ async function publishStructuredWorkerOutput(
   d.save({ ...d.load(), publicationLedger: ledger });
 }
 
+async function publishStaleWorkerOutput(
+  d: Deps,
+  pr: number,
+  round: number,
+  envelope: Envelope,
+  output: WorkerOutput,
+  currentCommit: string | undefined,
+): Promise<void> {
+  if (!d.prComment) throw new Error('dispatcher PR publication adapter is required');
+  const key = createHash('sha256')
+    .update(`${envelope.message_id}:worker-stale-context:${round}:${envelope.context.commit}`)
+    .digest('hex')
+    .slice(0, 32);
+  const marker = `${workerPublicationMarker} key=${key} -->`;
+  const body = [
+    `[Worker] round=${round} stale_context commit=${envelope.context.commit} current_commit=${currentCommit ?? 'unknown'}`,
+    marker,
+    'This structured Worker result is informational only because the PR head or human-feedback context changed while the Worker was running. It was not used to advance the sloop.',
+    output.evidence.map((item) => `- ${item}`).join('\n'),
+    '[Human Verification]',
+    '```json',
+    JSON.stringify(output.human_verification, null, 2),
+    '```',
+  ].join('\n\n');
+  const state = d.load();
+  const ledger = { ...(state.publicationLedger ?? {}) } as Record<string, any>;
+  const existing = ledger[key];
+  if (existing?.status === 'published') return;
+  ledger[key] = {
+    ...(existing ?? {}),
+    key,
+    action: 'worker-stale-context',
+    placement: 'general',
+    status: 'pending',
+    marker,
+    run: envelope.context.run_id,
+    role: 'worker',
+    round,
+    commit: envelope.context.commit,
+    current_commit: currentCommit,
+    artifact: body,
+    context_cursor: envelope.context.feedback_cursor,
+    envelope_hash: envelopeHash(envelope),
+    artifact_hash: createHash('sha256').update(body).digest('hex'),
+    intended_action: 'general',
+  };
+  d.save({ ...d.load(), publicationLedger: ledger });
+  const current = d.pullRequest ? await d.pullRequest(pr) : undefined;
+  if (current?.comments?.some((comment) => comment.body?.includes(marker))) {
+    ledger[key].status = 'published';
+    d.save({ ...d.load(), publicationLedger: ledger });
+    return;
+  }
+  const remote = await d.prComment(pr, body);
+  if (remote) ledger[key].remote_id = String(remote);
+  ledger[key].status = 'published';
+  d.save({ ...d.load(), publicationLedger: ledger });
+}
+
 function openFindingIds(state: State, role: 'qa' | 'staff'): string[] {
   const prefix = role === 'qa' ? 'Q' : 'S';
   const ids = new Set<string>();
@@ -1510,6 +1569,12 @@ async function runWorker(
   });
   const spec = roleCommand(cfg.workerCommand, issue.number, cfg);
   if (!spec) throw new Error('workerCommand is required');
+  // The persisted head is the claim-time snapshot for a resumed PR. Fresh
+  // claims have no prior head yet; the post-run fetch below still reconciles
+  // the newly-created/updated PR before accepting structured output.
+  const before = pr && d.pullRequest && d.load().headSha ? await d.pullRequest(pr) : undefined;
+  if (before && d.pullRequest) ingestHumanFeedback(d, before, issue.number);
+  const feedbackCursorBefore = humanFeedbackCursor(d.load());
   const initialPrBody = withIssueClosingReference(
     '',
     issue.number,
@@ -1567,6 +1632,32 @@ async function runWorker(
   if (!metadata.pr || metadata.base !== (cfg.baseBranch ?? 'staging'))
     throw new Error('Worker must report an existing PR based on staging');
   if (!d.pullRequest) throw new Error('GitHub PR evidence adapter is required');
+  const after = structured ? await d.pullRequest(metadata.pr) : undefined;
+  if (after) ingestHumanFeedback(d, after, issue.number);
+  const feedbackCursorAfter = humanFeedbackCursor(d.load());
+  if (
+    structured &&
+    after &&
+    (structured.context.commit !== after.headRefOid || feedbackCursorAfter !== feedbackCursorBefore)
+  ) {
+    await publishStaleWorkerOutput(
+      d,
+      metadata.pr,
+      round,
+      structured,
+      structured.output as WorkerOutput,
+      after.headRefOid,
+    );
+    const currentFeedback = [
+      feedback,
+      ...Object.values(d.load().humanFeedback ?? {})
+        .filter((item: any) => item.status !== 'withdrawn' && item.status !== 'resolved')
+        .map((item: any) => `[${item.id}] ${item.body}`),
+    ]
+      .filter(Boolean)
+      .join('\n\n');
+    return runWorker(cfg, d, issue, round, metadata.pr, context, currentFeedback);
+  }
   const currentBody = await (d.pullRequestBody ?? pullRequestBody)(metadata.pr);
   const normalizedBody = withIssueClosingReference(
     currentBody,
