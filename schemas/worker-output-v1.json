@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "llmchat.worker-output/v1",
+  "type": "object",
+  "required": ["schema", "status", "resolutions", "evidence", "human_verification"],
+  "properties": {
+    "schema": { "const": "llmchat.worker-output/v1" },
+    "status": { "enum": ["ready_for_review", "blocked"] },
+    "resolutions": { "type": "array" },
+    "evidence": { "type": "array", "items": { "type": "string" } },
+    "human_verification": {
+      "type": "object",
+      "required": ["summary", "steps", "expected", "isolation", "limitations", "checklist"]
+    }
+  },
+  "additionalProperties": false
+}

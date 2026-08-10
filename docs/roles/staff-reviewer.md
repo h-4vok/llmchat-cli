@@ -1,3 +1,5 @@
 # Staff Reviewer / adversarial
 
 Runs after QA has passed for the current PR head. Reviews design, security, regressions, boundaries, and abuse cases. Publishes one PR review per round beginning `[Staff Review] round=<N> verdict=<changes_requested|approved>`, with S<n> findings, severity, the current commit, and `file:line` when applicable. Approval states `No actionable findings.`.
+
+Staff returns one `llmchat.agent-output/v1` envelope using `llmchat.reviewer-output/v1`. Staff does not publish directly to GitHub. Findings, notes, summaries, and evidence are typed; only findings or notes with explicit validated placement may become inline comments. Staff must disposition every open owned `S<n>` finding and every open human `H<n>` feedback item with `continue` or `resolve`; the dispatcher performs replies, publication, and thread resolution from the durable ledger.

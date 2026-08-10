@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "llmchat.reviewer-output/v1",
+  "type": "object",
+  "required": ["schema", "result", "summary", "evidence", "artifacts", "dispositions"],
+  "properties": {
+    "schema": { "const": "llmchat.reviewer-output/v1" },
+    "result": { "enum": ["accepted", "changes_requested", "blocked"] },
+    "summary": { "type": "string", "minLength": 1 },
+    "evidence": { "type": "array", "items": { "type": "string" } },
+    "artifacts": { "type": "array" },
+    "dispositions": { "type": "object" }
+  },
+  "additionalProperties": false
+}

@@ -12,6 +12,18 @@ import {
 } from 'node:fs';
 import { extname, isAbsolute, join } from 'node:path';
 import { tmpdir } from 'node:os';
+import {
+  validateEnvelope,
+  parseDelimitedEnvelope,
+  Envelope,
+  ReviewerOutput,
+  WorkerOutput,
+} from './agent-output.js';
+import {
+  loadPublicationState,
+  savePublicationState,
+  recordEnvelope,
+} from './publication-ledger.js';
 
 export type Status =
   | 'queued'
@@ -79,6 +91,10 @@ export type State = {
   completedIssues?: number[];
   drainStatus?: 'running' | 'done';
   updatedAt?: number;
+  /** Structured role results and publication data are retained for recovery. */
+  agentEnvelopes?: Record<string, Envelope>;
+  humanFeedback?: Record<string, unknown>;
+  publicationLedger?: Record<string, unknown>;
 };
 
 export type Check = {
@@ -144,6 +160,11 @@ type Deps = {
   updatePullRequestBody?: (pr: number, body: string) => void | Promise<void>;
   pullRequestBody?: (pr: number) => string | Promise<string>;
   prComment?: (pr: number, body: string) => void | Promise<void>;
+  prInlineComment?: (
+    pr: number,
+    body: string,
+    payload: Record<string, unknown>,
+  ) => void | Promise<void>;
 };
 type Spec = {
   command: string;
@@ -669,6 +690,69 @@ function roleCommand(value: Command | undefined, issue: number, cfg: Config): Sp
   return { ...spec, logInvocation: cfg.logRoleInvocation !== false };
 }
 
+function structuredRoleSpec(spec: Spec, role: 'worker' | 'qa' | 'staff', runId: string): Spec {
+  if (!/^(?:.*[\\/])?codex(?:\.cmd|\.exe)?$/i.test(spec.command) || spec.args[0] !== 'exec')
+    return spec;
+  const runDir = join(root, '.llmchat', 'runs', runId);
+  mkdirSync(runDir, { recursive: true });
+  const schema = join(
+    root,
+    'schemas',
+    role === 'worker' ? 'worker-output-v1.json' : 'reviewer-output-v1.json',
+  );
+  const lastMessage = join(runDir, `${role}.json`);
+  const has = (flag: string) => spec.args.includes(flag);
+  const structuredFlags = [
+    ...(has('--output-schema') ? [] : ['--output-schema', schema]),
+    ...(has('--output-last-message') ? [] : ['--output-last-message', lastMessage]),
+  ];
+  return { ...spec, args: [spec.args[0], ...structuredFlags, ...spec.args.slice(1)] };
+}
+
+function readStructuredOutput(
+  runId: string,
+  role: 'worker' | 'qa' | 'staff',
+  context: Partial<{
+    run_id: string;
+    issue: number;
+    pr: number;
+    round: number;
+    commit: string;
+    feedback_cursor: string;
+  }> = {},
+): Envelope | undefined {
+  const file = join(root, '.llmchat', 'runs', runId, `${role}.json`);
+  if (!existsSync(file)) return undefined;
+  const raw = readFileSync(file, 'utf8');
+  let value: unknown;
+  try {
+    value = JSON.parse(raw);
+  } catch {
+    return parseDelimitedEnvelope(raw, { ...context, role });
+  }
+  return validateEnvelope(value, { ...context, role });
+}
+
+function retainEnvelope(d: Deps, envelope: Envelope): void {
+  const state = d.load();
+  const envelopes = { ...(state.agentEnvelopes ?? {}), [envelope.message_id]: envelope };
+  const output = envelope.output as ReviewerOutput | WorkerOutput;
+  const artifacts = 'artifacts' in output ? output.artifacts : [];
+  const ledger = { ...(state.publicationLedger ?? {}) };
+  for (const artifact of artifacts) {
+    const id = artifact.id ?? `${artifact.schema}:${artifact.body}`;
+    const key = `${envelope.message_id}:${id}`;
+    ledger[key] ??= {
+      key,
+      envelope: envelope.message_id,
+      artifact,
+      status: 'pending',
+      intendedPlacement: artifact.placement?.kind ?? 'general',
+    };
+  }
+  d.save({ ...state, agentEnvelopes: envelopes, publicationLedger: ledger });
+}
+
 function workerMetadata(output: string, knownPr?: number): { pr?: number; base?: string } {
   const match = output.match(/^\s*WORKER_RESULT\s+pr=(\d+)\s+base=([^\s]+)\s*$/im);
   if (match) return { pr: Number(match[1]), base: match[2] };
@@ -971,29 +1055,43 @@ async function runWorker(
   const output = await d.run(
     withWorkerLifecycle(
       d,
-      {
-        ...spec,
-        env: {
-          ...spec.env,
-          LLMCHAT_ISSUE_NUMBER: String(issue.number),
-          LLMCHAT_PR_BODY: initialPrBody,
+      structuredRoleSpec(
+        {
+          ...spec,
+          env: {
+            ...spec.env,
+            LLMCHAT_ISSUE_NUMBER: String(issue.number),
+            LLMCHAT_PR_BODY: initialPrBody,
+          },
+          input: rolePrompt(
+            issue,
+            'worker',
+            pr,
+            round,
+            context,
+            feedback,
+            d.load().headSha,
+            runId,
+            initialPrBody,
+          ),
         },
-        input: rolePrompt(
-          issue,
-          'worker',
-          pr,
-          round,
-          context,
-          feedback,
-          d.load().headSha,
-          runId,
-          initialPrBody,
-        ),
-      },
+        'worker',
+        runId,
+      ),
       issue.number,
       runId,
     ),
   );
+  const structured = readStructuredOutput(runId, 'worker', {
+    run_id: runId,
+    issue: issue.number,
+    round,
+  });
+  if (structured) {
+    retainEnvelope(d, structured);
+    const payload = structured.output as WorkerOutput;
+    if (payload.status === 'blocked') throw new Error('Worker returned blocked structured output');
+  }
   const metadata = workerMetadata(output, pr);
   if (!metadata.pr || metadata.base !== (cfg.baseBranch ?? 'staging'))
     throw new Error('Worker must report an existing PR based on staging');
@@ -1063,19 +1161,56 @@ async function runReview(
   if (!configured) throw new Error(`${role} command is required`);
   const spec = roleCommand(configured, issue.number, cfg);
   if (!spec) throw new Error(`${role} command is required`);
-  await d.run({
-    ...spec,
-    input: rolePrompt(
-      issue,
+  const runId = d.load().workerRunId ?? randomUUID();
+  const output = await d.run(
+    structuredRoleSpec(
+      {
+        ...spec,
+        input: rolePrompt(
+          issue,
+          role,
+          prNumber,
+          round,
+          d.load().taskContext ?? '',
+          role === 'qa' ? (d.load().lastQaFeedback ?? '') : (d.load().lastStaffFeedback ?? ''),
+          evidence.headRefOid,
+          d.load().workerRunId ?? 'dispatcher-run',
+        ),
+      },
       role,
-      prNumber,
-      round,
-      d.load().taskContext ?? '',
-      role === 'qa' ? (d.load().lastQaFeedback ?? '') : (d.load().lastStaffFeedback ?? ''),
-      evidence.headRefOid,
-      d.load().workerRunId ?? 'dispatcher-run',
+      runId,
     ),
+  );
+  const structured = readStructuredOutput(runId, role, {
+    run_id: runId,
+    issue: issue.number,
+    pr: prNumber,
+    round,
   });
+  if (structured) {
+    retainEnvelope(d, structured);
+    const payload = structured.output as ReviewerOutput;
+    if (payload.result === 'blocked') throw new Error(`${role} returned blocked structured output`);
+    const marker = role === 'qa' ? '[QA/SDET Review]' : '[Staff Review]';
+    const verdict =
+      role === 'qa'
+        ? payload.result === 'accepted'
+          ? 'passed'
+          : 'changes_requested'
+        : payload.result === 'accepted'
+          ? 'approved'
+          : 'changes_requested';
+    const body = [
+      `${marker} round=${round} verdict=${verdict} commit=${evidence.headRefOid}`,
+      payload.summary,
+      ...payload.evidence.map((item) => `- ${item}`),
+      ...payload.artifacts.map((artifact) => `- [${artifact.id ?? 'note'}] ${artifact.body}`),
+    ].join('\n\n');
+    if (!d.prComment) throw new Error('dispatcher PR publication adapter is required');
+    await d.prComment(prNumber, body);
+    const refreshed = d.pullRequest ? await d.pullRequest(prNumber) : evidence;
+    return { verdict, body, evidence: refreshed };
+  }
   const latest = await waitForEvidence(d, cfg, prNumber, (candidate) =>
     Boolean(latestReview(candidate, marker, round, candidate.headRefOid)),
   );

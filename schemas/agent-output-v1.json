@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "llmchat.agent-output/v1",
+  "type": "object",
+  "required": ["schema", "message_id", "producer", "context", "output"],
+  "properties": {
+    "schema": { "const": "llmchat.agent-output/v1" },
+    "message_id": { "type": "string", "minLength": 1 },
+    "producer": {
+      "type": "object",
+      "required": ["role"],
+      "properties": { "role": { "enum": ["worker", "qa", "staff"] } },
+      "additionalProperties": false
+    },
+    "context": {
+      "type": "object",
+      "required": ["run_id", "issue", "pr", "round", "commit", "feedback_cursor"],
+      "properties": {
+        "run_id": { "type": "string", "minLength": 1 },
+        "issue": { "type": "integer", "minimum": 1 },
+        "pr": { "type": "integer", "minimum": 1 },
+        "round": { "type": "integer", "minimum": 1 },
+        "commit": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+        "feedback_cursor": { "type": "string", "minLength": 1 }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}
