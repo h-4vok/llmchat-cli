@@ -4,6 +4,7 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readFileSync,
   rmSync,
   utimesSync,
   writeFileSync,
@@ -56,7 +57,7 @@ test('production GitHub publication adapters target replies, thread resolution, 
     '-f',
     'threadId=PRRT_thread',
   ]);
-  assert.deepEqual(githubReactionRequest('owner/repo', '123', 'eyes'), [
+  assert.deepEqual(githubReactionRequest('owner/repo', '123', 'issue', 'eyes'), [
     'api',
     'repos/owner/repo/issues/comments/123/reactions',
     '--method',
@@ -64,6 +65,22 @@ test('production GitHub publication adapters target replies, thread resolution, 
     '-f',
     'content=eyes',
   ]);
+  assert.deepEqual(githubReactionRequest('owner/repo', '456', 'review', 'eyes'), [
+    'api',
+    'repos/owner/repo/pulls/comments/456/reactions',
+    '--method',
+    'POST',
+    '-f',
+    'content=eyes',
+  ]);
+  assert.equal(
+    githubReactionRequest('owner/repo', '789', 'thread', 'eyes')[1],
+    'repos/owner/repo/pulls/comments/789/reactions',
+  );
+  assert.equal(
+    githubReactionRequest('owner/repo', '321', 'pull_request', 'eyes')[1],
+    'repos/owner/repo/issues/comments/321/reactions',
+  );
 });
 
 test('Windows batch commands use cmd.exe without Node shell mode', () => {
@@ -183,6 +200,7 @@ function harness(
   let state = overrides.initialState ?? {};
   const saves = [];
   const comments = [];
+  const reactions = [];
   const runs = [];
   const prBodyUpdates = [];
   const createdPrBodies = [];
@@ -317,6 +335,10 @@ function harness(
       pr.comments.push({ body, createdAt: `dispatcher-${pr.comments.length}` });
       return `comment-${pr.comments.length}`;
     },
+    prReact: async (number, commentId, source, reaction) => {
+      reactions.push({ number, commentId, source, reaction });
+      overrides.onReact?.({ number, commentId, source, reaction });
+    },
     now: () => Date.now(),
     pid: () => process.pid,
     processAlive: (pid) => pid > 0 && pid !== -1,
@@ -332,6 +354,7 @@ function harness(
     comments,
     runs,
     reviews,
+    reactions,
     saves,
     deps,
     state: () => state,
@@ -567,6 +590,43 @@ test('claim baseline excludes existing issue comments but ingests later addition
   assert.equal(h.state().humanFeedback?.issueBeforeClaim, undefined);
 });
 
+test('dispatcher preserves feedback source when selecting reaction endpoints', async () => {
+  const requests = [];
+  const h = harness(undefined, {
+    workerDuringRun: ({ pr, workerCount }) => {
+      if (workerCount !== 1) return;
+      pr.comments.push(
+        {
+          id: 'issue-comment-1',
+          body: 'Conversation feedback',
+          source: 'issue',
+          createdAt: '2',
+          updatedAt: '2',
+        },
+        {
+          id: 'review-comment-1',
+          body: 'Inline feedback',
+          source: 'thread',
+          createdAt: '3',
+          updatedAt: '3',
+        },
+      );
+    },
+    onReact: ({ commentId, source, reaction }) => {
+      requests.push(githubReactionRequest('owner/repo', commentId, source, reaction));
+    },
+  });
+
+  await dispatch(h.cfg, h.deps);
+
+  assert.deepEqual(h.reactions, [
+    { number: 14, commentId: 'issue-comment-1', source: 'issue', reaction: 'eyes' },
+    { number: 14, commentId: 'review-comment-1', source: 'thread', reaction: 'eyes' },
+  ]);
+  assert.equal(requests[0][1], 'repos/owner/repo/issues/comments/issue-comment-1/reactions');
+  assert.equal(requests[1][1], 'repos/owner/repo/pulls/comments/review-comment-1/reactions');
+});
+
 test('valid structured Worker output is dispatcher-published without role-authored evidence', async () => {
   const h = harness([{ number: 1, title: 'a' }], {
     structuredWorkerOutput: ({ runId, commit }) =>
@@ -605,6 +665,60 @@ test('valid structured Worker output is dispatcher-published without role-author
   assert.equal(workerComments.length, 1);
   assert.match(workerComments[0].body, /llmchat-worker-publish:v1/);
   assert.equal(h.state().status, 'ready_for_human_merge');
+});
+
+test('dispatcher accepts a Codex output file produced with its checked-in schema', async () => {
+  const h = harness([{ number: 1, title: 'a' }], {
+    structuredWorkerOutput: ({ spec, runId, commit }) => {
+      const schemaPath = spec.args[spec.args.indexOf('--output-schema') + 1];
+      const schema = JSON.parse(readFileSync(schemaPath, 'utf8'));
+      assert.equal(schema.properties.schema.type, 'string');
+      const outputPath = spec.args[spec.args.indexOf('--output-last-message') + 1];
+      writeFileSync(
+        outputPath,
+        JSON.stringify({
+          schema: 'llmchat.agent-output/v1',
+          message_id: 'worker-output-file-1',
+          producer: { role: 'worker' },
+          context: {
+            run_id: runId,
+            issue: 1,
+            pr: 14,
+            round: 1,
+            commit,
+            feedback_cursor: 'cursor-1',
+          },
+          output: {
+            schema: 'llmchat.worker-output/v1',
+            status: 'ready_for_review',
+            resolutions: [],
+            evidence: ['Dispatcher accepted the Codex output file.'],
+            human_verification: {
+              summary: 'Verify checked-in schema output ingestion.',
+              steps: ['Run the dispatcher regression suite.'],
+              expected: ['The separated output file is accepted.'],
+              isolation: 'Use the credential-free test harness.',
+              limitations: ['The test does not invoke the remote Codex service.'],
+              checklist: ['Confirm dispatcher-owned Worker publication.'],
+            },
+          },
+        }),
+      );
+      return 'visible role stream without an embedded envelope';
+    },
+  });
+
+  await dispatch(h.cfg, h.deps);
+
+  assert.equal(h.state().status, 'ready_for_human_merge');
+  assert.equal(
+    h.deps
+      .pullRequest(14)
+      .comments.filter((comment) =>
+        comment.body?.includes('Dispatcher accepted the Codex output file.'),
+      ).length,
+    1,
+  );
 });
 
 test('structured Worker output is preserved as stale and rerun after a PR head change', async () => {
@@ -667,6 +781,9 @@ test('Codex roles receive full envelope schemas and publication-owned prompts', 
   assert.match(qa.args.join(' '), /reviewer-agent-output-v1\.json/);
   assert.match(staff.args.join(' '), /reviewer-agent-output-v1\.json/);
   for (const run of [worker, qa, staff]) {
+    const schemaPath = run.args[run.args.indexOf('--output-schema') + 1];
+    const schema = JSON.parse(readFileSync(schemaPath, 'utf8'));
+    assert.equal(schema.properties.schema.type, 'string');
     assert.match(run.input, /return exactly one llmchat\.agent-output\/v1 envelope/i);
     assert.match(run.input, /Do not publish directly to GitHub|Do not publish GitHub/);
   }
@@ -1266,13 +1383,17 @@ test('--list prints only issue number and title while eligible issues retain bod
   }
 
   try {
+    const childEnv = Object.fromEntries(
+      Object.entries(process.env).filter(([key]) => key.toLowerCase() !== 'path'),
+    );
+    childEnv.PATH = `${fakeBin}${delimiter}${process.env.PATH ?? ''}`;
     const result = spawnSync(
       process.execPath,
       [join(process.cwd(), 'dist', 'dispatcher.js'), '--list'],
       {
         cwd: h.root,
         encoding: 'utf8',
-        env: { ...process.env, PATH: `${fakeBin}${delimiter}${process.env.PATH ?? ''}` },
+        env: childEnv,
       },
     );
     assert.equal(result.status, 0, result.stderr);

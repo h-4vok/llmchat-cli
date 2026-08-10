@@ -140,6 +140,8 @@ export type PullRequest = {
   statusCheckRollup?: Check[];
 };
 
+type FeedbackSource = 'pull_request' | 'issue' | 'review' | 'thread';
+
 type Command = string[] | { command: string; args: string[]; timeoutMs?: number; retries?: number };
 type Config = {
   baseBranch?: string;
@@ -190,7 +192,12 @@ type Deps = {
   ) => void | string | Promise<void | string>;
   prReply?: (pr: number, commentId: string, body: string) => void | string | Promise<void | string>;
   prResolve?: (pr: number, commentId: string) => void | Promise<void>;
-  prReact?: (pr: number, commentId: string, reaction: string) => void | Promise<void>;
+  prReact?: (
+    pr: number,
+    commentId: string,
+    source: FeedbackSource,
+    reaction: string,
+  ) => void | Promise<void>;
   reviewDiff?: (pr: number, commit: string) => DiffLine[];
 };
 type Spec = {
@@ -516,10 +523,16 @@ export function githubReplyRequest(
   ];
 }
 
-export function githubReactionRequest(repo: string, commentId: string, reaction: string): string[] {
+export function githubReactionRequest(
+  repo: string,
+  commentId: string,
+  source: FeedbackSource,
+  reaction: string,
+): string[] {
+  const resource = source === 'review' || source === 'thread' ? 'pulls' : 'issues';
   return [
     'api',
-    `repos/${repo}/issues/comments/${commentId}/reactions`,
+    `repos/${repo}/${resource}/comments/${commentId}/reactions`,
     '--method',
     'POST',
     '-f',
@@ -585,9 +598,14 @@ function resolvePullRequestThread(pr: number, commentId: string): void {
   gh(githubResolveReviewThreadRequest(thread.id));
 }
 
-function reactToPullRequestComment(pr: number, commentId: string, reaction: string): void {
+function reactToPullRequestComment(
+  pr: number,
+  commentId: string,
+  source: FeedbackSource,
+  reaction: string,
+): void {
   const repo = repositoryName();
-  gh(githubReactionRequest(repo, commentId, reaction));
+  gh(githubReactionRequest(repo, commentId, source, reaction));
 }
 
 function inlineCommentPullRequest(
@@ -1161,7 +1179,9 @@ function ingestHumanFeedback(d: Deps, pr: PullRequest, issue?: number): void {
       context_cursor: `${comment.id}:${comment.updatedAt ?? comment.createdAt ?? ''}`,
       status: 'open',
     };
-    void Promise.resolve(d.prReact?.(pr.number, comment.id, 'eyes')).catch(() => undefined);
+    void Promise.resolve(
+      d.prReact?.(pr.number, comment.id, comment.source ?? 'pull_request', 'eyes'),
+    ).catch(() => undefined);
   }
   for (const [id, item] of Object.entries(feedback)) {
     const existing = item as any;

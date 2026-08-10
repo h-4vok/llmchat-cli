@@ -4,8 +4,8 @@
   "type": "object",
   "required": ["schema", "status", "resolutions", "evidence", "human_verification"],
   "properties": {
-    "schema": { "const": "llmchat.worker-output/v1" },
-    "status": { "enum": ["ready_for_review", "blocked"] },
+    "schema": { "type": "string", "const": "llmchat.worker-output/v1" },
+    "status": { "type": "string", "enum": ["ready_for_review", "blocked"] },
     "resolutions": {
       "type": "array",
       "items": {
@@ -13,7 +13,7 @@
         "required": ["finding_id", "status", "response"],
         "properties": {
           "finding_id": { "type": "string", "pattern": "^[QS][0-9]+$" },
-          "status": { "enum": ["fixed", "answered", "not_fixed"] },
+          "status": { "type": "string", "enum": ["fixed", "answered", "not_fixed"] },
           "response": { "type": "string", "minLength": 1 }
         },
         "additionalProperties": false

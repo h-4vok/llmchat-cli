@@ -4,12 +4,12 @@
   "type": "object",
   "required": ["schema", "message_id", "producer", "context", "output"],
   "properties": {
-    "schema": { "const": "llmchat.agent-output/v1" },
+    "schema": { "type": "string", "const": "llmchat.agent-output/v1" },
     "message_id": { "type": "string", "minLength": 1 },
     "producer": {
       "type": "object",
       "required": ["role"],
-      "properties": { "role": { "const": "worker" } },
+      "properties": { "role": { "type": "string", "const": "worker" } },
       "additionalProperties": false
     },
     "context": {

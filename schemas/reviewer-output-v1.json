@@ -4,8 +4,8 @@
   "type": "object",
   "required": ["schema", "result", "summary", "evidence", "artifacts", "dispositions"],
   "properties": {
-    "schema": { "const": "llmchat.reviewer-output/v1" },
-    "result": { "enum": ["accepted", "changes_requested", "blocked"] },
+    "schema": { "type": "string", "const": "llmchat.reviewer-output/v1" },
+    "result": { "type": "string", "enum": ["accepted", "changes_requested", "blocked"] },
     "summary": { "type": "string", "minLength": 1 },
     "evidence": { "type": "array", "items": { "type": "string" } },
     "artifacts": {
@@ -15,6 +15,7 @@
         "required": ["schema", "body"],
         "properties": {
           "schema": {
+            "type": "string",
             "enum": [
               "review.finding/v1",
               "review.note/v1",
@@ -24,23 +25,23 @@
           },
           "id": { "type": "string", "pattern": "^[QS][0-9]+$" },
           "body": { "type": "string", "minLength": 1 },
-          "severity": { "enum": ["low", "medium", "high", "critical"] },
+          "severity": { "type": "string", "enum": ["low", "medium", "high", "critical"] },
           "placement": {
             "oneOf": [
               {
                 "type": "object",
                 "required": ["kind"],
-                "properties": { "kind": { "const": "general" } },
+                "properties": { "kind": { "type": "string", "const": "general" } },
                 "additionalProperties": false
               },
               {
                 "type": "object",
                 "required": ["kind", "path", "commit", "side", "line"],
                 "properties": {
-                  "kind": { "const": "inline" },
+                  "kind": { "type": "string", "const": "inline" },
                   "path": { "type": "string", "minLength": 1 },
                   "commit": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
-                  "side": { "enum": ["LEFT", "RIGHT"] },
+                  "side": { "type": "string", "enum": ["LEFT", "RIGHT"] },
                   "line": { "type": "integer", "minimum": 1 },
                   "start_line": { "type": "integer", "minimum": 1 }
                 },
@@ -54,7 +55,7 @@
     },
     "dispositions": {
       "type": "object",
-      "additionalProperties": { "enum": ["continue", "resolve"] }
+      "additionalProperties": { "type": "string", "enum": ["continue", "resolve"] }
     }
   },
   "additionalProperties": false
