@@ -351,6 +351,7 @@ test('role commands preserve distinct argv and logging configuration', async () 
 test('invalid role commands fail before any process launch with migration guidance', async () => {
   for (const invalid of [
     { command: 'codex', args: ['exec'] },
+    { command: 'C:\\tools\\codex.exe', args: ['exec'] },
     { command: 'codex', args: ['exec', '--sandbox', 'read-only', '--sandbox', 'read-only'] },
     { command: 'codex', args: ['exec', '--sandbox', 'invalid'] },
   ]) {

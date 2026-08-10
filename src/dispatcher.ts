@@ -651,7 +651,7 @@ function roleCommand(value: Command | undefined, issue: number, cfg: Config): Sp
     throw new Error(
       'role commands must be { command, args, timeoutMs, retries }; migrate each role command from argv arrays',
     );
-  if (/^(?:.*[\\/])?codex(?:\.cmd)?$/i.test(spec.command) && spec.args[0] === 'exec') {
+  if (/^(?:.*[\\/])?codex(?:\.cmd|\.exe)?$/i.test(spec.command) && spec.args[0] === 'exec') {
     const sandboxIndexes = spec.args.reduce<number[]>(
       (indexes, arg, index) => (arg === '--sandbox' ? [...indexes, index] : indexes),
       [],
