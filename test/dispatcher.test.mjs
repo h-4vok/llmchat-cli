@@ -265,6 +265,7 @@ function harness(
       pr.statusCheckRollup = checkSequences[Math.min(checkIndex++, checkSequences.length - 1)];
       return structuredClone(pr);
     },
+    issueComments: (issue) => overrides.issueComments?.(issue) ?? [],
     updatePullRequestBody: async (number, body) => {
       assert.equal(number, pr.number);
       pr.body = body;
@@ -495,6 +496,35 @@ test('review-level human feedback receives a stable H item and is available to S
   assert.equal(item?.remote_id, 'human-review-1');
   assert.equal(item?.source, 'review');
   assert.equal(item?.status, 'open');
+});
+
+test('claim baseline excludes existing issue comments but ingests later additions', async () => {
+  let reads = 0;
+  const h = harness(undefined, {
+    issueComments: () => {
+      reads += 1;
+      return reads === 1
+        ? [{ id: 'issue-before-claim', body: 'Historical context', createdAt: '1', updatedAt: '1' }]
+        : [
+            {
+              id: 'issue-before-claim',
+              body: 'Historical context',
+              createdAt: '1',
+              updatedAt: '1',
+            },
+            {
+              id: 'issue-after-claim',
+              body: 'Please verify the new behavior.',
+              createdAt: '2',
+              updatedAt: '2',
+            },
+          ];
+    },
+  });
+  await dispatch(h.cfg, h.deps);
+  assert.equal(h.state().humanFeedback?.H1?.remote_id, 'issue-after-claim');
+  assert.equal(h.state().humanFeedback?.H1?.source, 'issue');
+  assert.equal(h.state().humanFeedback?.issueBeforeClaim, undefined);
 });
 
 test('valid structured Worker output is dispatcher-published without role-authored evidence', async () => {
