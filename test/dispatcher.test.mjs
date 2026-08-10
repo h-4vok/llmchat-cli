@@ -54,6 +54,15 @@ test('review publication falls back completely and preserves idempotent caller b
   );
   assert.equal(inline.length, 1);
   assert.deepEqual(general, ['[Inline fallback] src/app.ts:4\nbad', 'summary']);
+  await publishFindings(
+    [{ body: 'bad', file: 'src/app.ts', line: 4 }],
+    'abc',
+    new Map([['src/app.ts', new Set([4])]]),
+    async (payload) => inline.push(payload),
+    async (body) => general.push(body),
+    new Set(['abc\x00src/app.ts\x004\x00\x00bad']),
+  );
+  assert.equal(inline.length, 1);
 });
 
 test('role review output requires the dispatcher delimiter and matching metadata', () => {

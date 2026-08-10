@@ -57,8 +57,12 @@ export async function publishFindings(
   changedLines: ReadonlyMap<string, ReadonlySet<number>>,
   inline: (payload: ReturnType<typeof inlinePayload>) => Promise<void>,
   general: (body: string) => Promise<void>,
+  published = new Set<string>(),
 ) {
   for (const finding of findings) {
+    const key = `${commitId}\0${finding.file ?? ''}\0${finding.line ?? ''}\0${finding.endLine ?? ''}\0${finding.body}`;
+    if (published.has(key)) continue;
+    published.add(key);
     if (placement(finding, changedLines) !== 'inline') {
       await general(finding.body);
       continue;

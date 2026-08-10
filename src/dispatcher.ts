@@ -12,6 +12,7 @@ import {
 } from 'node:fs';
 import { extname, isAbsolute, join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { publishFindings, type ReviewFinding } from './review-publication.js';
 
 export type Status =
   | 'queued'
@@ -380,7 +381,76 @@ function commentPullRequest(pr: number, body: string): void {
   gh(['pr', 'comment', String(pr), '--body', body]);
 }
 
-function publishPullRequestReview(pr: number, body: string): void {
+async function publishPullRequestReview(pr: number, body: string): Promise<void> {
+  const marker = body.match(/^\[(?:QA\/SDET Review|Staff Review)\]/m)?.[0];
+  const commit = body.match(/\bcommit=([0-9a-f]{7,40})\b/)?.[1];
+  const candidates: ReviewFinding[] = [];
+  for (const line of body.split(/\r?\n/)) {
+    const location = line.match(/(?:^|\s)([^\s`]+):(\d+)(?:-(\d+))?(?:\s|$)/);
+    if (location && commit)
+      candidates.push({
+        body: line.trim(),
+        file: location[1],
+        line: Number(location[2]),
+        endLine: location[3] ? Number(location[3]) : undefined,
+      });
+  }
+  if (marker && commit && candidates.length) {
+    const repo = ghJson<{ nameWithOwner: string }>([
+      'repo',
+      'view',
+      '--json',
+      'nameWithOwner',
+    ]).nameWithOwner;
+    const filePages = ghJson<Array<Array<{ filename: string; patch?: string }>>>([
+      'api',
+      `repos/${repo}/pulls/${pr}/files`,
+      '--paginate',
+      '--slurp',
+    ]);
+    const files = filePages.flat();
+    const changed = new Map<string, Set<number>>();
+    for (const file of files) {
+      const lines = new Set<number>();
+      let current = 0;
+      for (const part of (file.patch ?? '').split(/\r?\n/)) {
+        const header = part.match(/^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@/);
+        if (header) {
+          current = Number(header[1]);
+          continue;
+        }
+        if (part.startsWith('+') && !part.startsWith('+++')) lines.add(current++);
+        else if (!part.startsWith('-')) current++;
+      }
+      changed.set(file.filename, lines);
+    }
+    const published = new Set<string>();
+    const generalBody = body
+      .split(/\r?\n/)
+      .filter((line) => !candidates.some((finding) => finding.body === line.trim()))
+      .join('\n')
+      .trim();
+    await publishFindings(
+      candidates,
+      commit,
+      changed,
+      async (payload) => {
+        const input = join(tmpdir(), `llmchat-inline-${process.pid}-${Date.now()}.json`);
+        try {
+          writeFileSync(input, JSON.stringify(payload), 'utf8');
+          gh(['api', `repos/${repo}/pulls/${pr}/comments`, '--method', 'POST', '--input', input]);
+        } finally {
+          rmSync(input, { force: true });
+        }
+      },
+      async (fallback) => {
+        commentPullRequest(pr, `${marker} ${fallback}`);
+      },
+      published,
+    );
+    if (generalBody) commentPullRequest(pr, generalBody);
+    return;
+  }
   const temp = join(tmpdir(), `llmchat-review-${process.pid}-${Date.now()}.md`);
   try {
     writeFileSync(temp, body, 'utf8');
