@@ -15,9 +15,11 @@ import { tmpdir } from 'node:os';
 import {
   validateEnvelope,
   parseDelimitedEnvelope,
+  envelopeHash,
   Envelope,
   ReviewerOutput,
   WorkerOutput,
+  EnvelopeValidationContext,
 } from './agent-output.js';
 import {
   loadPublicationState,
@@ -106,6 +108,7 @@ export type Check = {
 };
 
 export type Review = {
+  id?: string;
   body?: string;
   commitId?: string;
   submittedAt?: string;
@@ -122,7 +125,14 @@ export type PullRequest = {
   mergeStateStatus?: string;
   mergeable?: string;
   reviews?: Review[];
-  comments?: Array<{ body?: string; createdAt?: string }>;
+  comments?: Array<{
+    id?: string;
+    body?: string;
+    createdAt?: string;
+    updatedAt?: string;
+    url?: string;
+    author?: string;
+  }>;
   statusCheckRollup?: Check[];
 };
 
@@ -166,6 +176,9 @@ type Deps = {
     body: string,
     payload: Record<string, unknown>,
   ) => void | string | Promise<void | string>;
+  prReply?: (pr: number, commentId: string, body: string) => void | string | Promise<void | string>;
+  prResolve?: (pr: number, commentId: string) => void | Promise<void>;
+  prReact?: (pr: number, commentId: string, reaction: string) => void | Promise<void>;
   reviewDiff?: (pr: number, commit: string) => DiffLine[];
 };
 type Spec = {
@@ -370,14 +383,19 @@ function pullRequest(pr: number): PullRequest {
     mergeStateStatus: raw.mergeStateStatus ?? raw.merge_state_status,
     mergeable: raw.mergeable,
     reviews: (raw.reviews ?? []).map((review: any) => ({
+      id: review.id ? String(review.id) : undefined,
       body: review.body,
       state: review.state,
       submittedAt: review.submittedAt ?? review.submitted_at,
       commitId: review.commit?.oid ?? review.commitId ?? review.commit_id,
     })),
     comments: (raw.comments ?? []).map((comment: any) => ({
+      id: comment.id ? String(comment.id) : undefined,
       body: comment.body,
       createdAt: comment.createdAt ?? comment.created_at,
+      updatedAt: comment.updatedAt ?? comment.updated_at,
+      url: comment.url ?? comment.html_url,
+      author: comment.author?.login ?? comment.user?.login,
     })),
     statusCheckRollup: (raw.statusCheckRollup ?? []).map((check: any) => ({
       name: check.name ?? check.context ?? check.workflowName ?? '',
@@ -768,14 +786,7 @@ function structuredRoleSpec(spec: Spec, role: 'worker' | 'qa' | 'staff', runId: 
 function readStructuredOutput(
   runId: string,
   role: 'worker' | 'qa' | 'staff',
-  context: Partial<{
-    run_id: string;
-    issue: number;
-    pr: number;
-    round: number;
-    commit: string;
-    feedback_cursor: string;
-  }> = {},
+  context: EnvelopeValidationContext = {},
 ): Envelope | undefined {
   const file = join(root, '.llmchat', 'runs', runId, `${role}.json`);
   if (!existsSync(file)) return undefined;
@@ -787,6 +798,42 @@ function readStructuredOutput(
     return parseDelimitedEnvelope(raw, { ...context, role });
   }
   return validateEnvelope(value, { ...context, role });
+}
+
+function findingState(state: State, role?: 'worker' | 'qa' | 'staff'): EnvelopeValidationContext {
+  const allocated = new Set<string>();
+  const latestDisposition = new Map<string, string>();
+  for (const envelope of Object.values(state.agentEnvelopes ?? {})) {
+    const output = envelope.output as ReviewerOutput;
+    if (!('artifacts' in output)) continue;
+    for (const artifact of output.artifacts) {
+      if (artifact.schema === 'review.finding/v1' && artifact.id) {
+        allocated.add(artifact.id);
+        if (output.dispositions[artifact.id])
+          latestDisposition.set(artifact.id, output.dispositions[artifact.id]);
+      }
+    }
+    for (const [id, disposition] of Object.entries(output.dispositions)) {
+      if (id.match(/^[QS]\d+$/)) {
+        allocated.add(id);
+        latestDisposition.set(id, disposition);
+      }
+    }
+  }
+  const open = [...allocated].filter((id) => latestDisposition.get(id) !== 'resolve');
+  const openHumanFeedbackIds = Object.entries(state.humanFeedback ?? {})
+    .filter(
+      ([, value]) =>
+        (value as any)?.status !== 'withdrawn' && (value as any)?.status !== 'resolved',
+    )
+    .map(([id]) => id)
+    .filter((id) => /^H\d+$/.test(id));
+  return {
+    allocatedFindingIds: [...allocated],
+    openFindingIds: [...open],
+    openHumanFeedbackIds,
+    ...(role ? { role } : {}),
+  };
 }
 
 function retainEnvelope(d: Deps, envelope: Envelope): void {
@@ -804,6 +851,10 @@ function retainEnvelope(d: Deps, envelope: Envelope): void {
       artifact,
       status: 'pending',
       intendedPlacement: artifact.placement?.kind ?? 'general',
+      envelope_hash: envelopeHash(envelope),
+      source_id: artifact.schema === 'review.finding/v1' ? artifact.id : undefined,
+      context_cursor: envelope.context.feedback_cursor,
+      intended_action: artifact.placement?.kind === 'inline' ? 'inline' : 'general',
     };
   }
   d.save({ ...state, agentEnvelopes: envelopes, publicationLedger: ledger });
@@ -814,6 +865,136 @@ function workerMetadata(output: string, knownPr?: number): { pr?: number; base?:
   if (match) return { pr: Number(match[1]), base: match[2] };
   if (knownPr) return { pr: knownPr, base: 'staging' };
   throw new Error('Worker must exit 0 and print WORKER_RESULT pr=<number> base=staging');
+}
+
+const publicationMarker = '<!-- llmchat-review-publish:v1';
+function ingestHumanFeedback(d: Deps, pr: PullRequest): void {
+  const state = d.load();
+  const feedback = { ...(state.humanFeedback ?? {}) } as Record<string, any>;
+  let next =
+    Object.keys(feedback)
+      .filter((id) => /^H\d+$/.test(id))
+      .reduce((n, id) => Math.max(n, Number(id.slice(1))), 0) + 1;
+  for (const comment of pr.comments ?? []) {
+    if (
+      !comment.id ||
+      !comment.body ||
+      comment.body.includes(publicationMarker) ||
+      comment.body.startsWith('[Worker]')
+    )
+      continue;
+    const existing = Object.values(feedback).find(
+      (item: any) => item.remote_id === comment.id,
+    ) as any;
+    if (existing) {
+      if (existing.body !== comment.body || existing.updated_at !== comment.updatedAt) {
+        existing.revisions = [
+          ...(existing.revisions ?? []),
+          { body: comment.body, updated_at: comment.updatedAt },
+        ];
+        existing.body = comment.body;
+        existing.updated_at = comment.updatedAt;
+        existing.context_cursor = `${comment.id}:${comment.updatedAt ?? comment.createdAt ?? ''}`;
+      }
+      continue;
+    }
+    const id = `H${next++}`;
+    feedback[id] = {
+      id,
+      remote_id: comment.id,
+      body: comment.body,
+      source: 'pull_request',
+      created_at: comment.createdAt,
+      updated_at: comment.updatedAt,
+      context_cursor: `${comment.id}:${comment.updatedAt ?? comment.createdAt ?? ''}`,
+      status: 'open',
+    };
+    void Promise.resolve(d.prReact?.(pr.number, comment.id, 'eyes')).catch(() => undefined);
+  }
+  d.save({ ...state, humanFeedback: feedback });
+}
+
+function openFindingIds(state: State, role: 'qa' | 'staff'): string[] {
+  const prefix = role === 'qa' ? 'Q' : 'S';
+  const ids = new Set<string>();
+  for (const envelope of Object.values(state.agentEnvelopes ?? {})) {
+    const output = envelope.output as ReviewerOutput;
+    if (!('artifacts' in output)) continue;
+    for (const artifact of output.artifacts)
+      if (
+        artifact.schema === 'review.finding/v1' &&
+        artifact.id?.startsWith(prefix) &&
+        output.dispositions[artifact.id] !== 'resolve'
+      )
+        ids.add(artifact.id);
+    for (const [id, disposition] of Object.entries(output.dispositions))
+      if (id.startsWith(prefix) && disposition !== 'resolve') ids.add(id);
+  }
+  return [...ids];
+}
+
+async function dispatchWorkerResolutions(d: Deps, pr: number, output: WorkerOutput): Promise<void> {
+  const state = d.load();
+  const ledger = { ...(state.publicationLedger ?? {}) } as Record<string, any>;
+  for (const resolution of output.resolutions) {
+    const source = Object.values(ledger).find(
+      (entry: any) => entry.source_id === resolution.finding_id,
+    ) as any;
+    if (!source || source.resolution_status === resolution.status) continue;
+    const body = `[Worker] ref=${resolution.finding_id} status=${resolution.status}\n${resolution.response}`;
+    source.resolution_status = resolution.status;
+    source.resolution_body = body;
+    source.resolution_action =
+      source.intended_action === 'inline' && source.remote_id ? 'reply' : 'general';
+    d.save({ ...d.load(), publicationLedger: ledger });
+    if (source.resolution_action === 'reply' && d.prReply)
+      source.resolution_remote_id = String(await d.prReply(pr, source.remote_id, body));
+    else if (d.prComment) source.resolution_remote_id = String(await d.prComment(pr, body));
+    source.resolution_published = true;
+    d.save({ ...d.load(), publicationLedger: ledger });
+  }
+}
+
+async function dispatchReviewerDispositions(
+  d: Deps,
+  pr: number,
+  role: 'qa' | 'staff',
+  dispositions: Record<string, 'continue' | 'resolve'>,
+): Promise<void> {
+  const state = d.load();
+  const ledger = { ...(state.publicationLedger ?? {}) } as Record<string, any>;
+  for (const [id, disposition] of Object.entries(dispositions)) {
+    if (disposition !== 'resolve') continue;
+    if (role === 'qa' && !id.startsWith('Q')) throw new Error(`QA cannot resolve ${id}`);
+    if (role === 'staff' && !/^[SH]\d+$/.test(id)) throw new Error(`Staff cannot resolve ${id}`);
+    const source = Object.values(ledger).find((entry: any) => entry.source_id === id) as any;
+    if (id.startsWith('H') && !source) {
+      const feedback = d.load().humanFeedback?.[id] as any;
+      if (feedback?.remote_id && d.prComment)
+        await d.prComment(pr, `[Staff Review] resolution ref=${id} disposition=resolve`);
+      if (feedback) {
+        const humanFeedback = { ...(d.load().humanFeedback ?? {}) } as Record<string, any>;
+        humanFeedback[id] = { ...feedback, status: 'resolved' };
+        d.save({ ...d.load(), humanFeedback });
+      }
+      continue;
+    }
+    if (!source || source.status === 'resolved') continue;
+    const body = `[${role === 'qa' ? 'QA/SDET' : 'Staff'} Review] resolution ref=${id} disposition=resolve`;
+    if (source.intended_action === 'inline' && source.remote_id && d.prResolve)
+      await d.prResolve(pr, source.remote_id);
+    else if (d.prComment) await d.prComment(pr, body);
+    source.status = 'resolved';
+    source.resolved_by = role;
+    source.resolution_action =
+      source.intended_action === 'inline' ? 'resolve_thread' : 'general_resolution';
+    d.save({ ...d.load(), publicationLedger: ledger });
+    if (id.startsWith('H') && d.load().humanFeedback?.[id]) {
+      const humanFeedback = { ...(d.load().humanFeedback ?? {}) } as Record<string, any>;
+      humanFeedback[id] = { ...humanFeedback[id], status: 'resolved' };
+      d.save({ ...d.load(), humanFeedback });
+    }
+  }
 }
 
 function roundFromBody(body: string | undefined): number | undefined {
@@ -1139,6 +1320,7 @@ async function runWorker(
     ),
   );
   const structured = readStructuredOutput(runId, 'worker', {
+    ...findingState(d.load(), 'worker'),
     run_id: runId,
     issue: issue.number,
     round,
@@ -1191,6 +1373,8 @@ async function runWorker(
     workerPid: undefined,
     workerHeartbeatAt: d.now(),
   });
+  if (structured)
+    await dispatchWorkerResolutions(d, metadata.pr, structured.output as WorkerOutput);
   status(d, issue.number, 'worker_ready_for_review', {
     pr: metadata.pr,
     branch: d.load().branch ?? evidence.headRefName,
@@ -1220,6 +1404,7 @@ async function runReview(
   const spec = roleCommand(configured, issue.number, cfg);
   if (!spec) throw new Error(`${role} command is required`);
   const runId = d.load().workerRunId ?? randomUUID();
+  if (d.pullRequest) ingestHumanFeedback(d, await d.pullRequest(prNumber));
   const output = await d.run(
     structuredRoleSpec(
       {
@@ -1240,6 +1425,7 @@ async function runReview(
     ),
   );
   const structured = readStructuredOutput(runId, role, {
+    ...findingState(d.load(), role),
     run_id: runId,
     issue: issue.number,
     pr: prNumber,
@@ -1266,6 +1452,7 @@ async function runReview(
       publication: ReturnType<typeof publishArtifact>,
       action: string,
       inline = false,
+      sourceId?: string,
     ) => {
       const existing = ledger[publication.key];
       if (
@@ -1287,6 +1474,11 @@ async function runReview(
         commit,
         artifact: publication.body,
         fallback_reason: publication.fallbackReason,
+        source_id: sourceId,
+        context_cursor: structured.context.feedback_cursor,
+        envelope_hash: envelopeHash(structured),
+        artifact_hash: createHash('sha256').update(publication.body).digest('hex'),
+        intended_action: publication.kind === 'inline' ? 'inline' : 'general',
       };
       d.save({ ...d.load(), publicationLedger: ledger });
       const current = d.pullRequest ? await d.pullRequest(prNumber) : undefined;
@@ -1304,7 +1496,12 @@ async function runReview(
           inline && publication.kind === 'inline' && publication.payload && d.prInlineComment
             ? await d.prInlineComment(prNumber, publication.body, publication.payload)
             : await d.prComment!(prNumber, publication.body);
-        if (remote) ledger[publication.key].remote_id = String(remote);
+        if (remote) {
+          ledger[publication.key].remote_id = String(remote);
+          ledger[publication.key].url = String(remote).startsWith('http')
+            ? String(remote)
+            : undefined;
+        }
         ledger[publication.key].status = publication.fallbackReason ? 'fallback' : 'published';
         d.save({ ...d.load(), publicationLedger: ledger });
       } catch (error) {
@@ -1314,7 +1511,7 @@ async function runReview(
             kind: 'general' as const,
             fallbackReason: `inline publication failed: ${error instanceof Error ? error.message : String(error)}`,
           };
-          await publish(fallback, 'general-fallback');
+          await publish(fallback, 'general-fallback', false, sourceId);
           return;
         }
         ledger[publication.key].status = 'failed';
@@ -1334,8 +1531,10 @@ async function runReview(
         publication,
         publication.kind === 'inline' ? 'inline' : 'general',
         publication.kind === 'inline',
+        artifact.id,
       );
     }
+    await dispatchReviewerDispositions(d, prNumber, role, payload.dispositions);
     const body = [
       `${reviewMarker} round=${round} verdict=${verdict} commit=${evidence.headRefOid}`,
       payload.summary,

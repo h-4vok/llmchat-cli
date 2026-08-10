@@ -45,6 +45,90 @@ test('structured envelopes validate and delimited fallback ignores stream text',
   );
 });
 
+test('state-aware reviewer validation requires lifecycle dispositions and unique findings', () => {
+  const finding = {
+    ...envelope,
+    message_id: 'message-q1',
+    output: {
+      ...envelope.output,
+      result: 'changes_requested',
+      artifacts: [
+        {
+          schema: 'review.finding/v1',
+          id: 'Q1',
+          body: 'fix',
+          placement: { kind: 'general' },
+        },
+      ],
+    },
+  };
+  assert.throws(
+    () =>
+      validateEnvelope(
+        {
+          ...envelope,
+          output: { ...envelope.output, result: 'accepted' },
+        },
+        { ...context, role: 'qa', openFindingIds: ['Q1'] },
+      ),
+    /missing disposition/,
+  );
+  assert.throws(
+    () =>
+      validateEnvelope(
+        {
+          ...finding,
+          message_id: 'message-q1-reused',
+        },
+        { ...context, role: 'qa', allocatedFindingIds: ['Q1'], openFindingIds: [] },
+      ),
+    /already allocated/,
+  );
+  assert.throws(
+    () =>
+      validateEnvelope(
+        {
+          ...envelope,
+          output: { ...envelope.output, unexpected: true },
+        },
+        { ...context, role: 'qa' },
+      ),
+    /schema additional field/,
+  );
+});
+
+test('Worker resolution references must exist in persisted reviewer findings', () => {
+  const worker = {
+    ...envelope,
+    message_id: 'worker-message',
+    producer: { role: 'worker' },
+    output: {
+      schema: 'llmchat.worker-output/v1',
+      status: 'ready_for_review',
+      resolutions: [{ finding_id: 'Q9', status: 'fixed', response: 'done' }],
+      evidence: ['test'],
+      human_verification: {
+        summary: 'summary',
+        steps: ['step'],
+        expected: ['expected'],
+        isolation: 'temp',
+        limitations: ['diagnostic'],
+        checklist: ['check'],
+      },
+    },
+  };
+  assert.throws(
+    () =>
+      validateEnvelope(worker, {
+        ...context,
+        role: 'worker',
+        allocatedFindingIds: ['Q1'],
+        openFindingIds: ['Q1'],
+      }),
+    /unknown worker finding reference/,
+  );
+});
+
 test('placement validates sides and every line in a range', () => {
   const index = buildDiffIndex([
     { path: 'src/a.ts', side: 'LEFT', line: 4 },

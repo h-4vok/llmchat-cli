@@ -24,6 +24,9 @@
         "feedback_cursor": { "type": "string", "minLength": 1 }
       },
       "additionalProperties": false
+    },
+    "output": {
+      "oneOf": [{ "$ref": "llmchat.worker-output/v1" }, { "$ref": "llmchat.reviewer-output/v1" }]
     }
   },
   "additionalProperties": false
