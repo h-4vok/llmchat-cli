@@ -12,7 +12,7 @@
   },
   "qaCommand": {
     "command": "codex",
-    "args": ["exec", "--sandbox", "read-only"],
+    "args": ["exec", "--sandbox", "workspace-write"],
     "timeoutMs": 600000
   },
   "requiredPrChecks": ["pr-checks"],
