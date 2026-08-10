@@ -1,7 +1,15 @@
 import assert from 'node:assert/strict';
-import { existsSync, mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  utimesSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { delimiter, join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { test } from 'node:test';
 import {
@@ -1034,6 +1042,47 @@ test('status rejects unsupported flag combinations', () => {
     assert.notEqual(result.status, 0);
     assert.match(result.stderr, /--status accepts only the optional --verbose flag/);
     assert.equal(result.stdout, '');
+  }
+});
+
+test('--list prints only issue number and title while eligible issues retain body data', () => {
+  const h = harness();
+  const fakeBin = mkdtempSync(join(tmpdir(), 'llmchat-list-bin-'));
+  const stub = join(fakeBin, 'gh-stub.mjs');
+  writeFileSync(
+    stub,
+    `process.stdout.write(JSON.stringify([
+      { number: 25, title: 'Structured agent output', body: 'internal acceptance criteria' },
+      { number: 7, title: 'Earlier issue', body: 'other internal context' }
+    ]));\n`,
+  );
+
+  if (process.platform === 'win32') {
+    writeFileSync(join(fakeBin, 'gh.cmd'), '@echo off\r\nnode "%~dp0gh-stub.mjs" %*\r\n');
+  } else {
+    const gh = join(fakeBin, 'gh');
+    writeFileSync(gh, `#!/bin/sh\nexec node "${stub}" "$@"\n`);
+    chmodSync(gh, 0o755);
+  }
+
+  try {
+    const result = spawnSync(
+      process.execPath,
+      [join(process.cwd(), 'dist', 'dispatcher.js'), '--list'],
+      {
+        cwd: h.root,
+        encoding: 'utf8',
+        env: { ...process.env, PATH: `${fakeBin}${delimiter}${process.env.PATH ?? ''}` },
+      },
+    );
+    assert.equal(result.status, 0, result.stderr);
+    assert.deepEqual(JSON.parse(result.stdout), [
+      { number: 7, title: 'Earlier issue' },
+      { number: 25, title: 'Structured agent output' },
+    ]);
+    assert.doesNotMatch(result.stdout, /body|internal acceptance criteria|other internal context/);
+  } finally {
+    rmSync(fakeBin, { recursive: true, force: true });
   }
 });
 

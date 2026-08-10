@@ -1644,7 +1644,8 @@ async function main() {
     ? JSON.parse(readFileSync(join(root, 'sloop.config.json'), 'utf8'))
     : {};
   if (args.includes('--list')) {
-    console.log(JSON.stringify(eligible(), null, 2));
+    const listedIssues = eligible().map(({ number, title }) => ({ number, title }));
+    console.log(JSON.stringify(listedIssues, null, 2));
     return;
   }
   if (args.includes('--recover-lock')) {
