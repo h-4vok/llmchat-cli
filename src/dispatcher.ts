@@ -97,6 +97,7 @@ export type State = {
   /** Structured role results and publication data are retained for recovery. */
   agentEnvelopes?: Record<string, Envelope>;
   humanFeedback?: Record<string, unknown>;
+  humanFeedbackBaseline?: Record<string, { updated_at?: string; created_at?: string }>;
   publicationLedger?: Record<string, unknown>;
 };
 
@@ -164,6 +165,14 @@ type Deps = {
   comment: (i: number, b: string) => void;
   run: (s: Spec) => Promise<string>;
   pullRequest?: (pr: number) => Promise<PullRequest> | PullRequest;
+  issueComments?: (issue: number) => Array<{
+    id?: string;
+    body?: string;
+    createdAt?: string;
+    updatedAt?: string;
+    url?: string;
+    author?: string;
+  }>;
   now: () => number;
   pid: () => number;
   processAlive?: (pid: number) => boolean;
@@ -366,6 +375,29 @@ function eligible(): Issue[] {
     '--limit',
     '100',
   ]).sort((a, b) => a.number - b.number);
+}
+
+function issueComments(issue: number) {
+  const repo = ghJson<{ nameWithOwner: string }>([
+    'repo',
+    'view',
+    '--json',
+    'nameWithOwner',
+  ]).nameWithOwner;
+  const pages = ghJson<any[]>([
+    'api',
+    `repos/${repo}/issues/${issue}/comments`,
+    '--paginate',
+    '--slurp',
+  ]);
+  return pages.flat().map((comment: any) => ({
+    id: comment.id ? String(comment.id) : undefined,
+    body: comment.body,
+    createdAt: comment.created_at,
+    updatedAt: comment.updated_at,
+    url: comment.html_url,
+    author: comment.user?.login,
+  }));
 }
 
 function pullRequest(pr: number): PullRequest {
@@ -745,6 +777,14 @@ function normalizedError(
 
 function claimNewIssue(d: Deps, issue: number): void {
   const current = d.load();
+  const baseline = Object.fromEntries(
+    (d.issueComments?.(issue) ?? [])
+      .filter((comment) => comment.id)
+      .map((comment) => [
+        String(comment.id),
+        { updated_at: comment.updatedAt, created_at: comment.createdAt },
+      ]),
+  );
   d.save({
     completedIssues: current.completedIssues ?? [],
     stagingGreen: current.stagingGreen,
@@ -752,6 +792,7 @@ function claimNewIssue(d: Deps, issue: number): void {
     status: 'claimed',
     reviewRound: 1,
     drainStatus: 'running',
+    ...(Object.keys(baseline).length ? { humanFeedbackBaseline: baseline } : {}),
     updatedAt: d.now(),
   });
   console.error(`[sloop] issue #${issue}: claimed`);
@@ -759,6 +800,35 @@ function claimNewIssue(d: Deps, issue: number): void {
     issue,
     `Sloop engineering v2: estado claimed. Skill activa: ${skillFor('claimed')}. QA precede a Staff; no se hace merge automÃ¡tico.`,
   );
+}
+
+async function establishFeedbackBaseline(d: Deps, issue: number, pr?: number): Promise<void> {
+  const baseline = { ...(d.load().humanFeedbackBaseline ?? {}) };
+  for (const comment of d.issueComments?.(issue) ?? []) {
+    if (comment.id)
+      baseline[String(comment.id)] = {
+        updated_at: comment.updatedAt,
+        created_at: comment.createdAt,
+      };
+  }
+  if (pr && d.pullRequest) {
+    const current = await d.pullRequest(pr);
+    for (const comment of current.comments ?? []) {
+      if (comment.id)
+        baseline[String(comment.id)] = {
+          updated_at: comment.updatedAt,
+          created_at: comment.createdAt,
+        };
+    }
+    for (const review of current.reviews ?? []) {
+      if (review.id)
+        baseline[String(review.id)] = {
+          updated_at: review.updatedAt,
+          created_at: review.submittedAt,
+        };
+    }
+  }
+  d.save({ ...d.load(), humanFeedbackBaseline: baseline });
 }
 
 function rolePrompt(
@@ -914,15 +984,23 @@ function workerMetadata(output: string, knownPr?: number): { pr?: number; base?:
 
 const publicationMarker = '<!-- llmchat-review-publish:v1';
 const workerPublicationMarker = '<!-- llmchat-worker-publish:v1';
-function ingestHumanFeedback(d: Deps, pr: PullRequest): void {
+function ingestHumanFeedback(d: Deps, pr: PullRequest, issue?: number): void {
   const state = d.load();
   const feedback = { ...(state.humanFeedback ?? {}) } as Record<string, any>;
+  const baseline = state.humanFeedbackBaseline ?? {};
   let next =
     Object.keys(feedback)
       .filter((id) => /^H\d+$/.test(id))
       .reduce((n, id) => Math.max(n, Number(id.slice(1))), 0) + 1;
   const seenRemoteIds = new Set<string>();
   const conversation = [
+    ...(issue
+      ? (d.issueComments?.(issue) ?? []).map((comment) => ({
+          ...comment,
+          source: 'issue' as const,
+          inReplyToId: undefined,
+        }))
+      : []),
     ...(pr.comments ?? []),
     ...(pr.reviews ?? []).map((review) => ({
       id: review.id,
@@ -944,6 +1022,13 @@ function ingestHumanFeedback(d: Deps, pr: PullRequest): void {
     )
       continue;
     seenRemoteIds.add(comment.id);
+    const baselineItem = baseline[comment.id];
+    if (
+      baselineItem &&
+      (comment.updatedAt ?? comment.createdAt ?? '') <=
+        (baselineItem.updated_at ?? baselineItem.created_at ?? '')
+    )
+      continue;
     const existing = Object.values(feedback).find(
       (item: any) => item.remote_id === comment.id,
     ) as any;
@@ -1491,11 +1576,13 @@ async function runWorker(
       structured.output as WorkerOutput,
     );
   d.save({ ...d.load(), pr: metadata.pr, workerPid: undefined, workerHeartbeatAt: d.now() });
-  const evidence = await waitForEvidence(d, cfg, metadata.pr, (candidate) => {
-    const head = candidate.headRefOid;
-    return Boolean(latestWorkerComment(candidate, round, head));
-  });
-  if (!latestWorkerComment(evidence, round, evidence.headRefOid))
+  const evidence = structured
+    ? await d.pullRequest(metadata.pr)
+    : await waitForEvidence(d, cfg, metadata.pr, (candidate) => {
+        const head = candidate.headRefOid;
+        return Boolean(latestWorkerComment(candidate, round, head));
+      });
+  if (!structured && !latestWorkerComment(evidence, round, evidence.headRefOid))
     throw new Error(
       `Worker exited successfully but did not publish [Worker] evidence on PR #${metadata.pr}`,
     );
@@ -1552,7 +1639,7 @@ async function runReview(
   const spec = roleCommand(configured, issue.number, cfg);
   if (!spec) throw new Error(`${role} command is required`);
   const runId = d.load().workerRunId ?? randomUUID();
-  if (d.pullRequest) ingestHumanFeedback(d, await d.pullRequest(prNumber));
+  if (d.pullRequest) ingestHumanFeedback(d, await d.pullRequest(prNumber), issue.number);
   const output = await d.run(
     structuredRoleSpec(
       {
@@ -2194,6 +2281,7 @@ export async function dispatch(cfg: Config, d: Deps): Promise<void> {
             pr: d.load().pr,
             workerRecoveryCount: d.load().workerRecoveryCount ?? 0,
           });
+          await establishFeedbackBaseline(d, issue.number, d.load().pr);
           d.comment(
             issue.number,
             'Dispatcher detectó un Worker perdido y levantará una ejecución de recovery.',
@@ -2308,6 +2396,7 @@ async function main() {
     load: () => readState(),
     save: writeState,
     eligible,
+    issueComments,
     comment: (i, body) => gh(['issue', 'comment', String(i), '--body', body]),
     run: runCommand,
     pullRequest,
