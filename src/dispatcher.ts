@@ -128,6 +128,8 @@ export type PullRequest = {
   comments?: Array<{
     id?: string;
     body?: string;
+    source?: 'pull_request' | 'issue' | 'review' | 'thread';
+    inReplyToId?: string;
     createdAt?: string;
     updatedAt?: string;
     url?: string;
@@ -373,6 +375,35 @@ function pullRequest(pr: number): PullRequest {
     '--json',
     'number,state,baseRefName,headRefName,headRefOid,body,mergeStateStatus,mergeable,reviews,comments,statusCheckRollup',
   ]);
+  const repo = ghJson<{ nameWithOwner: string }>([
+    'repo',
+    'view',
+    '--json',
+    'nameWithOwner',
+  ]).nameWithOwner;
+  const issueCommentPages = ghJson<any[]>([
+    'api',
+    `repos/${repo}/issues/${pr}/comments`,
+    '--paginate',
+    '--slurp',
+  ]);
+  const reviewCommentPages = ghJson<any[]>([
+    'api',
+    `repos/${repo}/pulls/${pr}/comments`,
+    '--paginate',
+    '--slurp',
+  ]);
+  const issueComments = issueCommentPages.flat();
+  const reviewComments = reviewCommentPages.flat();
+  const conversation = [
+    ...(raw.comments ?? []).map((comment: any) => ({ ...comment, source: 'issue' })),
+    ...issueComments.map((comment: any) => ({ ...comment, source: 'issue' })),
+    ...reviewComments.map((comment: any) => ({
+      ...comment,
+      source: comment.in_reply_to_id ? 'thread' : 'review',
+    })),
+  ];
+  const seen = new Set<string>();
   return {
     number: raw.number,
     state: raw.state,
@@ -389,14 +420,22 @@ function pullRequest(pr: number): PullRequest {
       submittedAt: review.submittedAt ?? review.submitted_at,
       commitId: review.commit?.oid ?? review.commitId ?? review.commit_id,
     })),
-    comments: (raw.comments ?? []).map((comment: any) => ({
-      id: comment.id ? String(comment.id) : undefined,
-      body: comment.body,
-      createdAt: comment.createdAt ?? comment.created_at,
-      updatedAt: comment.updatedAt ?? comment.updated_at,
-      url: comment.url ?? comment.html_url,
-      author: comment.author?.login ?? comment.user?.login,
-    })),
+    comments: conversation
+      .map((comment: any) => ({
+        id: comment.id ? String(comment.id) : undefined,
+        body: comment.body,
+        source: comment.source,
+        inReplyToId: comment.in_reply_to_id ? String(comment.in_reply_to_id) : undefined,
+        createdAt: comment.createdAt ?? comment.created_at,
+        updatedAt: comment.updatedAt ?? comment.updated_at,
+        url: comment.url ?? comment.html_url,
+        author: comment.author?.login ?? comment.user?.login,
+      }))
+      .filter((comment: { id?: string }) => {
+        if (!comment.id || seen.has(comment.id)) return false;
+        seen.add(comment.id);
+        return true;
+      }),
     statusCheckRollup: (raw.statusCheckRollup ?? []).map((check: any) => ({
       name: check.name ?? check.context ?? check.workflowName ?? '',
       status: check.status ?? check.state,
@@ -787,9 +826,13 @@ function readStructuredOutput(
   runId: string,
   role: 'worker' | 'qa' | 'staff',
   context: EnvelopeValidationContext = {},
+  stream = '',
 ): Envelope | undefined {
   const file = join(root, '.llmchat', 'runs', runId, `${role}.json`);
-  if (!existsSync(file)) return undefined;
+  if (!existsSync(file)) {
+    if (!stream || !stream.includes('<<<llmchat.agent-output/v1>>>')) return undefined;
+    return parseDelimitedEnvelope(stream, { ...context, role });
+  }
   const raw = readFileSync(file, 'utf8');
   let value: unknown;
   try {
@@ -875,6 +918,7 @@ function ingestHumanFeedback(d: Deps, pr: PullRequest): void {
     Object.keys(feedback)
       .filter((id) => /^H\d+$/.test(id))
       .reduce((n, id) => Math.max(n, Number(id.slice(1))), 0) + 1;
+  const seenRemoteIds = new Set<string>();
   for (const comment of pr.comments ?? []) {
     if (
       !comment.id ||
@@ -883,6 +927,7 @@ function ingestHumanFeedback(d: Deps, pr: PullRequest): void {
       comment.body.startsWith('[Worker]')
     )
       continue;
+    seenRemoteIds.add(comment.id);
     const existing = Object.values(feedback).find(
       (item: any) => item.remote_id === comment.id,
     ) as any;
@@ -903,13 +948,26 @@ function ingestHumanFeedback(d: Deps, pr: PullRequest): void {
       id,
       remote_id: comment.id,
       body: comment.body,
-      source: 'pull_request',
+      source: comment.source ?? 'pull_request',
+      in_reply_to_id: comment.inReplyToId,
       created_at: comment.createdAt,
       updated_at: comment.updatedAt,
       context_cursor: `${comment.id}:${comment.updatedAt ?? comment.createdAt ?? ''}`,
       status: 'open',
     };
     void Promise.resolve(d.prReact?.(pr.number, comment.id, 'eyes')).catch(() => undefined);
+  }
+  for (const [id, item] of Object.entries(feedback)) {
+    const existing = item as any;
+    if (
+      existing.remote_id &&
+      !seenRemoteIds.has(String(existing.remote_id)) &&
+      existing.status !== 'withdrawn'
+    ) {
+      existing.status = 'withdrawn';
+      existing.withdrawn_at = new Date(d.now()).toISOString();
+      existing.context_cursor = `${existing.remote_id}:withdrawn:${existing.withdrawn_at}`;
+    }
   }
   d.save({ ...state, humanFeedback: feedback });
 }
@@ -1319,12 +1377,17 @@ async function runWorker(
       runId,
     ),
   );
-  const structured = readStructuredOutput(runId, 'worker', {
-    ...findingState(d.load(), 'worker'),
-    run_id: runId,
-    issue: issue.number,
-    round,
-  });
+  const structured = readStructuredOutput(
+    runId,
+    'worker',
+    {
+      ...findingState(d.load(), 'worker'),
+      run_id: runId,
+      issue: issue.number,
+      round,
+    },
+    output,
+  );
   if (structured) {
     retainEnvelope(d, structured);
     const payload = structured.output as WorkerOutput;
@@ -1424,14 +1487,19 @@ async function runReview(
       runId,
     ),
   );
-  const structured = readStructuredOutput(runId, role, {
-    ...findingState(d.load(), role),
-    run_id: runId,
-    issue: issue.number,
-    pr: prNumber,
-    round,
-    commit,
-  });
+  const structured = readStructuredOutput(
+    runId,
+    role,
+    {
+      ...findingState(d.load(), role),
+      run_id: runId,
+      issue: issue.number,
+      pr: prNumber,
+      round,
+      commit,
+    },
+    output,
+  );
   if (structured) {
     retainEnvelope(d, structured);
     const payload = structured.output as ReviewerOutput;
