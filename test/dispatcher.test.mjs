@@ -20,6 +20,7 @@ import {
   assertCodexStructuredOutputsSchema,
   codexResponseSchema,
   dispatcherLockPath,
+  dispatchPullRequestReaction,
   dispatch,
   githubReactionRequest,
   githubReplyRequest,
@@ -116,6 +117,32 @@ test('production GitHub publication adapters target replies, thread resolution, 
   assert.equal(
     githubReactionRequest('owner/repo', '321', 'pull_request', 'eyes')[1],
     'repos/owner/repo/issues/comments/321/reactions',
+  );
+});
+
+test('production reaction adapter dispatches issue and inline feedback to matching endpoints', () => {
+  const requests = [];
+  const run = (args) => requests.push(args);
+
+  dispatchPullRequestReaction('owner/repo', 'issue-1', 'issue', 'eyes', run);
+  dispatchPullRequestReaction('owner/repo', 'review-1', 'review', 'eyes', run);
+  dispatchPullRequestReaction('owner/repo', 'thread-1', 'thread', 'eyes', run);
+
+  assert.deepEqual(
+    requests.map((args) => args[1]),
+    [
+      'repos/owner/repo/issues/comments/issue-1/reactions',
+      'repos/owner/repo/pulls/comments/review-1/reactions',
+      'repos/owner/repo/pulls/comments/thread-1/reactions',
+    ],
+  );
+  assert.deepEqual(
+    requests.map((args) => args.slice(2)),
+    [
+      ['--method', 'POST', '-f', 'content=eyes'],
+      ['--method', 'POST', '-f', 'content=eyes'],
+      ['--method', 'POST', '-f', 'content=eyes'],
+    ],
   );
 });
 

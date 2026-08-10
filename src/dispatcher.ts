@@ -598,14 +598,23 @@ function resolvePullRequestThread(pr: number, commentId: string): void {
   gh(githubResolveReviewThreadRequest(thread.id));
 }
 
+export function dispatchPullRequestReaction(
+  repo: string,
+  commentId: string,
+  source: FeedbackSource,
+  reaction: string,
+  run: (args: string[]) => void = gh,
+): void {
+  run(githubReactionRequest(repo, commentId, source, reaction));
+}
+
 function reactToPullRequestComment(
   pr: number,
   commentId: string,
   source: FeedbackSource,
   reaction: string,
 ): void {
-  const repo = repositoryName();
-  gh(githubReactionRequest(repo, commentId, source, reaction));
+  dispatchPullRequestReaction(repositoryName(), commentId, source, reaction);
 }
 
 function inlineCommentPullRequest(
