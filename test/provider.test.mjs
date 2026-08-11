@@ -16,3 +16,7 @@ test('provider adapter reports unresolved system instructions without fallback',
     /Provider gemini could not resolve system instructions "unresolvable"\./,
   );
 });
+
+test('provider adapter omits instructions when none are requested', () => {
+  assert.equal(sendChat('gemini', { prompt: 'hello' }), 'Simulated response from gemini: hello');
+});
