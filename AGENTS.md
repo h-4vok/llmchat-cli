@@ -4,6 +4,10 @@ Use TDD for every behaviour: write a small failing behaviour test, make it pass
 with the smallest change, then refactor. Tests specify observable behaviour, not
 private structure.
 
+Use YAGNI.
+
+Use SOLID principles for methods, files and classes.
+
 Keep infrastructure humble. Move decisions out of filesystem, process, browser,
 network, and UI boundaries into testable modules.
 
