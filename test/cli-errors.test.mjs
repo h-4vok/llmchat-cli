@@ -36,6 +36,7 @@ test('the cli rejects invalid command shapes', () => {
   for (const [args, message] of cases) {
     const result = run(tempHome(), ...args);
     assert.notEqual(result.status, 0);
-    assert.match(result.stderr, message);
+    assert.equal(result.stderr, '');
+    assert.match(result.stdout, message);
   }
 });

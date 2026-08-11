@@ -1,10 +1,9 @@
 #!/usr/bin/env node
-import { runCli } from './cli-app.js';
-import { errorMessage } from './error-format.js';
+import { runCliProcess } from './cli-app.js';
+import { createOutput } from './output.js';
 
-try {
-  runCli(process.argv.slice(2));
-} catch (error) {
-  console.error(errorMessage(error));
-  process.exitCode = 1;
-}
+const output = createOutput({
+  write: (line) => process.stdout.write(`${line}\n`),
+});
+
+process.exitCode = await runCliProcess(process.argv.slice(2), output);

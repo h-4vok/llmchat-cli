@@ -9,8 +9,8 @@ test('chat supports provider precedence and deterministic output', () => {
   const configHome = mkdtempSync(join(tmpdir(), 'llmchat-cli-'));
   const missing = run(configHome, 'chat', 'hello');
   assert.notEqual(missing.status, 0);
-  assert.match(missing.stderr, /No provider selected/);
-  assert.equal(missing.stdout, '');
+  assert.match(missing.stdout, /No provider selected/);
+  assert.equal(missing.stderr, '');
   const beforePrompt = run(configHome, 'chat', '--provider', 'gemini', 'hello');
   assert.equal(beforePrompt.status, 0);
   assert.match(beforePrompt.stdout, /gemini.*hello/i);
@@ -39,7 +39,8 @@ test('configuration validation, clearing, and help are predictable', () => {
   const configHome = mkdtempSync(join(tmpdir(), 'llmchat-cli-'));
   const invalid = run(configHome, 'config', 'set-default-provider', 'openai');
   assert.notEqual(invalid.status, 0);
-  assert.match(invalid.stderr, /Unsupported provider/);
+  assert.equal(invalid.stderr, '');
+  assert.match(invalid.stdout, /Unsupported provider/);
   assert.equal(run(configHome, 'config', 'clear-default-provider').status, 0);
   assert.match(run(configHome, '--help').stdout, /Usage:.*chat/s);
   assert.match(run(configHome, '--help').stdout, /Examples:/);
@@ -102,10 +103,10 @@ test('system-instructions aliases require one value and reject conflicts', () =>
   const configHome = mkdtempSync(join(tmpdir(), 'llmchat-cli-'));
   const missing = run(configHome, 'chat', '--provider', 'gemini', '--gem');
   assert.notEqual(missing.status, 0);
-  assert.match(missing.stderr, /--gem requires a value/);
+  assert.match(missing.stdout, /--gem requires a value/);
   const missingBeforeOption = run(configHome, 'chat', '--gem', '--provider', 'gemini', 'hello');
   assert.notEqual(missingBeforeOption.status, 0);
-  assert.match(missingBeforeOption.stderr, /--gem requires a value/);
+  assert.match(missingBeforeOption.stdout, /--gem requires a value/);
   const conflict = run(
     configHome,
     'chat',
@@ -118,7 +119,7 @@ test('system-instructions aliases require one value and reject conflicts', () =>
     'hello',
   );
   assert.notEqual(conflict.status, 0);
-  assert.match(conflict.stderr, /Conflicting options/);
+  assert.match(conflict.stdout, /Conflicting options/);
 });
 
 test('system-instructions aliases are documented and omitted selection is unchanged', () => {
@@ -140,6 +141,7 @@ test('malformed configuration fails without replacing the file', () => {
   writeFileSync(file, '{not-json');
   const result = run(configHome, 'chat', 'hello');
   assert.notEqual(result.status, 0);
-  assert.match(result.stderr, /Unable to read llmchat configuration/);
+  assert.equal(result.stderr, '');
+  assert.match(result.stdout, /Unable to read llmchat configuration/);
   assert.equal(readFileSync(file, 'utf8'), '{not-json');
 });

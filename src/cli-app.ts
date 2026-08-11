@@ -1,29 +1,60 @@
+import { executeWithTimeout } from './adapter-contract.js';
+import { defaultChatRuntime, type ChatRuntime } from './chat-runtime.js';
 import { parseChat } from './cli-args.js';
 import { readCurrentConfig, removeDefaultProvider, saveDefaultProvider } from './config.js';
-import { sendChat } from './provider.js';
+import { errorMessage } from './error-format.js';
+import type { Output } from './output.js';
+import { redactSessionSecrets } from './secret-redaction.js';
 
 const supportedProvider = 'gemini';
-type CommandHandler = (args: string[]) => void;
+type CommandHandler = (
+  args: string[],
+  output: Output,
+  runtime: ChatRuntime,
+) => void | Promise<void>;
+type ConfigHandler = (args: string[]) => void;
 
 const commandHandlers: Record<string, CommandHandler> = {
   chat: runChat,
   config: runConfig,
 };
 
-export function runCli(args: string[]): void {
+export async function runCli(
+  args: string[],
+  output: Output,
+  runtime: ChatRuntime = defaultChatRuntime,
+): Promise<void> {
   const [command, ...commandArgs] = args;
-  if (isRootHelp(command)) return printRootHelp();
+  if (isRootHelp(command)) return void printRootHelp(output);
   const handler = commandHandlers[command];
   if (!handler) throw new Error(`Unknown command "${command}". Use "llmchat --help" for usage.`);
-  handler(commandArgs);
+  await handler(commandArgs, output, runtime);
+}
+
+export async function runCliProcess(
+  args: string[],
+  output: Output,
+  runtime: ChatRuntime = defaultChatRuntime,
+): Promise<0 | 1> {
+  try {
+    await runCli(args, output, runtime);
+    return 0;
+  } catch (error) {
+    output.emit({
+      speaker: 'llmchat',
+      tone: 'error',
+      message: redactSessionSecrets(errorMessage(error)),
+    });
+    return 1;
+  }
 }
 
 function isRootHelp(command: string | undefined): boolean {
   return !command || command === '--help' || command === '-h';
 }
 
-function runConfig(args: string[]): void {
-  if (isConfigHelp(args)) return printConfigHelp();
+function runConfig(args: string[], output: Output): void {
+  if (isConfigHelp(args)) return printConfigHelp(output);
   const action = configActions[args[0]];
   if (!action) throw new Error('Invalid config command. Use "llmchat config --help" for usage.');
   action(args);
@@ -33,7 +64,7 @@ function isConfigHelp(args: string[]): boolean {
   return !args.length || args[0] === '--help' || args[0] === '-h';
 }
 
-const configActions: Record<string, CommandHandler> = {
+const configActions: Record<string, ConfigHandler> = {
   'clear-default-provider': clearDefaultProvider,
   'set-default-provider': setDefaultProvider,
 };
@@ -51,14 +82,22 @@ function clearDefaultProvider(args: string[]): void {
   removeDefaultProvider();
 }
 
-function runChat(args: string[]): void {
+async function runChat(args: string[], output: Output, runtime: ChatRuntime): Promise<void> {
   const parsed = parseChat(args);
-  if (parsed.help) return printRootHelp();
+  if (parsed.help) return printRootHelp(output);
   if (!parsed.prompt) throw new Error('A prompt is required.');
   const provider = selectedProvider(parsed.provider);
-  console.log(
-    sendChat(provider, { prompt: parsed.prompt, systemInstructions: parsed.systemInstructions }),
-  );
+  const request = {
+    prompt: parsed.prompt,
+    systemInstructions: parsed.systemInstructions,
+  };
+  const context = runtime.contextFor(provider);
+  const adapter = runtime.adapterFor(provider);
+  const response = await executeWithTimeout(adapter, request, context, runtime.timeout);
+  output.emit({
+    speaker: provider,
+    message: response.text,
+  });
 }
 
 function selectedProvider(override: string | undefined): string {
@@ -85,8 +124,10 @@ function noProviderMessage(): string {
   return 'No provider selected. Set a default with "llmchat config set-default-provider gemini" or pass "--provider gemini".';
 }
 
-function printRootHelp(): void {
-  console.log(`Usage:
+function printRootHelp(output: Output): void {
+  output.emit({
+    speaker: 'llmchat',
+    message: `Usage:
   llmchat chat "<prompt>" [--provider <provider>] [--gem|--gpt|--system-instructions <name>]
   llmchat config <set-default-provider|clear-default-provider> [provider]
 
@@ -97,11 +138,14 @@ System instructions: --gem, --gpt, and --system-instructions are equivalent alia
 Examples:
   llmchat chat "hello" --provider gemini
   llmchat config set-default-provider gemini
-  llmchat config clear-default-provider`);
+  llmchat config clear-default-provider`,
+  });
 }
 
-function printConfigHelp(): void {
-  console.log(`Usage:
+function printConfigHelp(output: Output): void {
+  output.emit({
+    speaker: 'llmchat',
+    message: `Usage:
   llmchat config set-default-provider <provider>
   llmchat config clear-default-provider
 
@@ -109,5 +153,6 @@ Supported providers: gemini
 
 Examples:
   llmchat config set-default-provider gemini
-  llmchat config clear-default-provider`);
+  llmchat config clear-default-provider`,
+  });
 }

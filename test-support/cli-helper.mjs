@@ -1,11 +1,20 @@
 import { spawnSync } from 'node:child_process';
 import { join } from 'node:path';
 
-const cli = join(process.cwd(), 'dist', 'cli.js');
+const cli = join(process.cwd(), 'test-support', 'injected-cli.mjs');
+const productionCli = join(process.cwd(), 'dist', 'cli.js');
 
 export function run(configHome, ...args) {
+  return spawn(cli, configHome, args);
+}
+
+export function runProduction(configHome, ...args) {
+  return spawn(productionCli, configHome, args);
+}
+
+function spawn(entrypoint, configHome, args) {
   const options = typeof args[0] === 'object' ? args.shift() : {};
-  return spawnSync(process.execPath, [cli, ...args], {
+  return spawnSync(process.execPath, [entrypoint, ...args], {
     encoding: 'utf8',
     env: {
       ...process.env,
