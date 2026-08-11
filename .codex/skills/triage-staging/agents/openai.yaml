@@ -1,4 +1,0 @@
-interface:
-  display_name: 'triage-staging'
-  short_description: 'Reusable triage-staging workflow'
-  default_prompt: 'Use the triage-staging workflow for this repository.'

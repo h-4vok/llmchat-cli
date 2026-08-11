@@ -1,4 +1,0 @@
-interface:
-  display_name: 'staff-reviewer'
-  short_description: 'Reusable staff-reviewer workflow'
-  default_prompt: 'Use the staff-reviewer workflow for this repository.'
