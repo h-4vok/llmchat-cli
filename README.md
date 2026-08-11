@@ -1,23 +1,25 @@
 # llmchat-cli
 
-CLI para enviar un prompt a un chat web autenticado mediante un perfil de navegador persistente, recuperar una única respuesta y escribirla en `stdout`; el progreso y los errores van a `stderr`.
+CLI foundation for provider-backed chat. The MVP uses a deterministic simulation so it can be used and tested without network access; successful output goes to `stdout` and errors go to `stderr`.
 
 ## MVP
 
-- Proveedor funcional: Gemini, mediante Chromium/Playwright y el perfil persistente `~/.llmchat-cli/profiles/gemini`.
-- Un prompt por invocación; no se resuelven todavía login guiado, CAPTCHA, reintentos, configuración avanzada ni formatos alternativos.
-- ChatGPT y Perplexity quedan para fases posteriores.
+- Supported provider: `gemini`.
+- The selected default is stored in the user-local configuration directory (`$XDG_CONFIG_HOME/llmchat/config.json`, or the platform equivalent).
+- Real provider requests, authentication, streaming, and additional providers are planned for later phases.
 
-## Uso
+## Usage
 
 ```text
-llmchat --provider gemini "Explica qué es una API en una frase"
-llmchat --provider gemini --login
+llmchat config set-default-provider gemini
+llmchat chat "Explain what an API is in one sentence"
+llmchat chat "Explain what an API is" --provider gemini
+llmchat config clear-default-provider
 ```
 
-Requiere Node.js 20+ y Chromium instalado para Playwright. El login se realiza manualmente en la ventana del navegador y la sesión se conserva en el perfil local.
+Use `llmchat --help` and `llmchat config --help` for command usage and supported values. A provider can be passed before or after the prompt; the canonical form is `llmchat chat "<prompt>" --provider <provider>`.
 
-## Desarrollo
+## Development
 
 ```text
 npm install
@@ -25,4 +27,14 @@ npm run build
 npm test
 ```
 
-Este repositorio contiene sólo el esqueleto y la primera ruta Gemini end-to-end. Las decisiones pendientes están registradas como issues de GitHub.
+To install the current checkout as the global `llmchat` command while developing:
+
+```text
+npm run install:global
+llmchat --help
+llmchat chat --provider gemini "hello"
+```
+
+Remove the global development link with `npm run uninstall:global`.
+
+This repository contains the skeleton and the first end-to-end Gemini route. Open decisions are tracked as GitHub issues.

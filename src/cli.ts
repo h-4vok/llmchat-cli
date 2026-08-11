@@ -1,43 +1,159 @@
 #!/usr/bin/env node
-import { chromium } from 'playwright';
-import { mkdirSync } from 'node:fs';
-import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { homedir, platform } from 'node:os';
+import { dirname, join } from 'node:path';
+import { sendChat } from './provider.js';
 
-type Options = { provider: string; login: boolean; prompt?: string };
+const SUPPORTED_PROVIDER = 'gemini';
+type Config = { schemaVersion: 1; defaultProvider?: string; [key: string]: unknown };
 
-function parseArgs(argv: string[]): Options {
-  let provider = 'gemini';
-  let login = false;
-  const rest: string[] = [];
-  for (let i = 0; i < argv.length; i++) {
-    if (argv[i] === '--provider') provider = argv[++i] ?? '';
-    else if (argv[i] === '--login') login = true;
-    else if (argv[i] === '--help' || argv[i] === '-h') { console.error('Usage: llmchat [--provider gemini] [--login] "prompt"'); process.exit(0); }
-    else rest.push(argv[i]);
-  }
-  return { provider, login, prompt: rest.join(' ').trim() || undefined };
+function configPath(): string {
+  const root =
+    platform() === 'win32'
+      ? (process.env.LOCALAPPDATA ?? join(homedir(), 'AppData', 'Local'))
+      : platform() === 'darwin'
+        ? join(homedir(), 'Library', 'Application Support')
+        : (process.env.XDG_CONFIG_HOME ?? join(homedir(), '.config'));
+  return join(root, 'llmchat', 'config.json');
 }
 
-async function main(): Promise<void> {
-  const options = parseArgs(process.argv.slice(2));
-  if (options.provider !== 'gemini') throw new Error(`Provider not implemented: ${options.provider}`);
-  if (!options.login && !options.prompt) throw new Error('A prompt is required (or use --login).');
-  const profile = join(homedir(), '.llmchat-cli', 'profiles', 'gemini');
-  mkdirSync(profile, { recursive: true });
-  console.error(`[gemini] using persistent profile ${profile}`);
-  const context = await chromium.launchPersistentContext(profile, { headless: !options.login });
+function readConfig(): Partial<Config> {
   try {
-    const page = context.pages()[0] ?? await context.newPage();
-    await page.goto('https://gemini.google.com/app', { waitUntil: 'domcontentloaded' });
-    if (options.login) { console.error('[gemini] complete login in the browser, then press Enter here'); await new Promise<void>(resolve => process.stdin.once('data', () => resolve())); return; }
-    const prompt = page.locator('textarea').first();
-    await prompt.fill(options.prompt!);
-    await prompt.press('Enter');
-    const response = page.locator('[data-message-author-role="model"]').last();
-    await response.waitFor({ state: 'visible', timeout: 120000 });
-    process.stdout.write((await response.innerText()).trim() + '\n');
-  } finally { await context.close(); }
+    const parsed: unknown = JSON.parse(readFileSync(configPath(), 'utf8'));
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('invalid');
+    return parsed as Partial<Config>;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return {};
+    throw new Error('Unable to read llmchat configuration.');
+  }
 }
 
-main().catch(error => { console.error(`[error] ${error instanceof Error ? error.message : String(error)}`); process.exitCode = 1; });
+function validateProvider(provider: string): void {
+  if (provider !== SUPPORTED_PROVIDER) {
+    throw new Error(
+      `Unsupported provider "${provider}". Supported providers: ${SUPPORTED_PROVIDER}.`,
+    );
+  }
+}
+
+function printRootHelp(): void {
+  console.log(`Usage:
+  llmchat chat "<prompt>" [--provider <provider>] [--gem|--gpt|--system-instructions <name>]
+  llmchat config <set-default-provider|clear-default-provider> [provider]
+
+Supported providers: gemini
+
+System instructions: --gem, --gpt, and --system-instructions are equivalent aliases.
+
+Examples:
+  llmchat chat "hello" --provider gemini
+  llmchat config set-default-provider gemini
+  llmchat config clear-default-provider`);
+}
+
+function printConfigHelp(): void {
+  console.log(`Usage:
+  llmchat config set-default-provider <provider>
+  llmchat config clear-default-provider
+
+Supported providers: gemini
+
+Examples:
+  llmchat config set-default-provider gemini
+  llmchat config clear-default-provider`);
+}
+
+function parseChat(args: string[]): {
+  prompt?: string;
+  provider?: string;
+  systemInstructions?: string;
+  help: boolean;
+} {
+  let provider: string | undefined;
+  let systemInstructions: string | undefined;
+  let systemInstructionsFlag: string | undefined;
+  const promptParts: string[] = [];
+  for (let i = 0; i < args.length; i += 1) {
+    if (args[i] === '--help' || args[i] === '-h') return { help: true };
+    if (args[i] === '--provider') {
+      provider = args[++i];
+      if (!provider || provider.startsWith('--')) throw new Error('--provider requires a value.');
+    } else if (['--gem', '--gpt', '--system-instructions'].includes(args[i])) {
+      const flag = args[i];
+      if (systemInstructionsFlag)
+        throw new Error(
+          `Conflicting options: ${systemInstructionsFlag} cannot be combined with ${flag}.`,
+        );
+      systemInstructionsFlag = flag;
+      systemInstructions = args[++i];
+      if (!systemInstructions || systemInstructions.startsWith('--'))
+        throw new Error(`${flag} requires a value.`);
+    } else if (args[i].startsWith('--')) {
+      throw new Error(`Unknown option "${args[i]}".`);
+    } else promptParts.push(args[i]);
+  }
+  return {
+    prompt: promptParts.join(' ').trim() || undefined,
+    provider,
+    systemInstructions,
+    help: false,
+  };
+}
+
+function setDefaultProvider(provider: string): void {
+  validateProvider(provider);
+  const path = configPath();
+  const config = readConfig();
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(
+    path,
+    `${JSON.stringify({ ...config, schemaVersion: 1, defaultProvider: provider }, null, 2)}\n`,
+    'utf8',
+  );
+}
+
+function clearDefaultProvider(): void {
+  const path = configPath();
+  const config = readConfig();
+  if (!Object.prototype.hasOwnProperty.call(config, 'defaultProvider')) return;
+  delete config.defaultProvider;
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, `${JSON.stringify({ ...config, schemaVersion: 1 }, null, 2)}\n`, 'utf8');
+}
+
+function main(): void {
+  const [command, ...args] = process.argv.slice(2);
+  if (!command || command === '--help' || command === '-h') return printRootHelp();
+  if (command === 'config') {
+    if (!args.length || args[0] === '--help' || args[0] === '-h') return printConfigHelp();
+    if (args[0] === 'set-default-provider' && args.length === 2) return setDefaultProvider(args[1]);
+    if (args[0] === 'clear-default-provider' && args.length === 1) return clearDefaultProvider();
+    throw new Error('Invalid config command. Use "llmchat config --help" for usage.');
+  }
+  if (command !== 'chat')
+    throw new Error(`Unknown command "${command}". Use "llmchat --help" for usage.`);
+  const parsed = parseChat(args);
+  if (parsed.help) return printRootHelp();
+  if (!parsed.prompt) throw new Error('A prompt is required.');
+  // Validate an invocation override before touching persisted configuration.
+  if (parsed.provider) validateProvider(parsed.provider);
+  const provider = parsed.provider ?? readConfig().defaultProvider;
+  if (!provider)
+    throw new Error(
+      'No provider selected. Set a default with "llmchat config set-default-provider gemini" or pass "--provider gemini".',
+    );
+  validateProvider(provider);
+  console.log(
+    sendChat(provider, {
+      prompt: parsed.prompt,
+      systemInstructions: parsed.systemInstructions,
+    }),
+  );
+}
+
+try {
+  main();
+} catch (error) {
+  console.error(`[error] ${error instanceof Error ? error.message : String(error)}`);
+  process.exitCode = 1;
+}
