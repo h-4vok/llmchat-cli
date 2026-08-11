@@ -1,7 +1,11 @@
 import assert from 'node:assert/strict';
+import { mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { test } from 'node:test';
 import { createChatRuntime } from '../dist/chat-runtime.js';
 import { runCliProcess } from '../dist/cli-app.js';
+import { ensureProviderStorage } from '../dist/secure-storage.js';
 
 const paths = {
   root: '/data/llmchat',
@@ -63,4 +67,26 @@ test('CLI provisions context before obtaining or executing the adapter', async (
 
   assert.equal(await runCliProcess(['chat', '--provider', 'gemini', 'hello'], output, runtime), 0);
   assert.deepEqual(calls, ['storage', 'adapter', 'execute']);
+});
+
+test('Windows offline chat completes after provisioning local storage', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'llmchat-windows-offline-'));
+  const runtime = createChatRuntime((provider) =>
+    ensureProviderStorage(provider, {
+      input: { platform: 'win32', home: root, env: { LOCALAPPDATA: root } },
+      accessControl: { secureDirectory: () => true, secureFile: () => true },
+    }),
+  );
+  const events = [];
+
+  const status = await runCliProcess(
+    ['chat', 'hola', '--provider', 'gemini'],
+    { emit: (event) => events.push(event) },
+    runtime,
+  );
+
+  assert.equal(status, 0);
+  assert.deepEqual(events, [
+    { speaker: 'gemini', message: 'Simulated response from gemini: hola' },
+  ]);
 });

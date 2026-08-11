@@ -6,8 +6,6 @@ import { test } from 'node:test';
 import { appendDiagnosticLog, ensureProviderStorage } from '../dist/secure-storage.js';
 import { createStorageFileSystem } from '../dist/storage-file-system.js';
 
-const backupExclusion = { excludeAndVerify: () => true };
-
 function storageInput(platform) {
   if (platform === 'win32') {
     return { platform, home: 'C:\\Users\\me', env: { LOCALAPPDATA: 'C:\\Local' } };
@@ -27,7 +25,6 @@ function realOptions(root, secureFile) {
   return {
     input: { platform: 'win32', home: root, env: { LOCALAPPDATA: root } },
     accessControl: { secureDirectory: () => true, secureFile },
-    backupExclusion,
   };
 }
 
@@ -75,7 +72,6 @@ test('POSIX chmod observes a real existing log before and after append', () => {
     {
       input: { platform: 'linux', home: root, env: { XDG_DATA_HOME: root } },
       fileSystem,
-      backupExclusion,
     },
   );
 
@@ -92,20 +88,7 @@ test('storage fails closed when Windows ACL verification fails', () => {
         input: storageInput('win32'),
         fileSystem,
         accessControl: { secureDirectory: () => false, secureFile: () => false },
-        backupExclusion,
       }),
     /Unable to verify user-only access/,
-  );
-});
-
-test('default backup policy fails closed on unsupported Linux', () => {
-  const fileSystem = { mkdir() {}, chmod() {}, appendFileSafely() {}, writeFile() {} };
-  assert.throws(
-    () =>
-      ensureProviderStorage('gemini', {
-        input: storageInput('linux'),
-        fileSystem,
-      }),
-    /No secure backup exclusion mechanism.*linux/i,
   );
 });

@@ -1,6 +1,5 @@
 import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import {
@@ -42,16 +41,19 @@ test('Windows ACL verification failure is reported', () => {
 });
 
 test(
-  'native Windows ACL secures and verifies directory and file paths containing spaces',
+  'native Windows ACL secures new and pre-existing local-app-data paths without elevation',
   { skip: process.platform !== 'win32' },
   () => {
-    const root = mkdtempSync(join(tmpdir(), 'llmchat acl native '));
+    assert.ok(process.env.LOCALAPPDATA);
+    const root = mkdtempSync(join(process.env.LOCALAPPDATA, 'llmchat acl runtime '));
     const directory = join(root, 'profile with spaces');
     const file = join(directory, 'diagnostic with spaces.log');
     mkdirSync(directory);
     writeFileSync(file, 'diagnostic');
 
     try {
+      assert.equal(nodeWindowsAccessControl.secureDirectory(directory), true);
+      assert.equal(nodeWindowsAccessControl.secureFile(file), true);
       assert.equal(nodeWindowsAccessControl.secureDirectory(directory), true);
       assert.equal(nodeWindowsAccessControl.secureFile(file), true);
       const directoryAcl = inspectWindowsAcl(directory, 'directory');

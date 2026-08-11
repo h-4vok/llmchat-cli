@@ -1,6 +1,5 @@
 import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
-import { nodeBackupExclusion, type BackupExclusion } from './backup-exclusion.js';
 import {
   providerStoragePaths,
   runtimeDataPathInput,
@@ -22,7 +21,6 @@ export type StorageOptions = {
   now?: () => Date;
   artifactId?: () => string;
   fileSystem?: StorageFileSystem;
-  backupExclusion?: BackupExclusion;
   accessControl?: StorageAccessControl;
 };
 
@@ -43,7 +41,6 @@ export function ensureProviderStorage(
     fileSystem.mkdir(directory, { recursive: true, mode: directoryMode });
     secureDirectory(fileSystem, access, directory, input.platform);
   }
-  verifyBackupExclusion(options, paths.root, input.platform);
   return paths;
 }
 
@@ -121,17 +118,6 @@ function storageDirectories(paths: ProviderStoragePaths): string[] {
     paths.diagnosticsDirectory,
     paths.screenshotsDirectory,
   ];
-}
-
-function verifyBackupExclusion(
-  options: StorageOptions,
-  root: string,
-  platform: NodeJS.Platform,
-): void {
-  const exclusion = options.backupExclusion ?? nodeBackupExclusion;
-  if (!exclusion.excludeAndVerify(root, platform)) {
-    throw new Error(`Unable to verify backup exclusion for "${root}".`);
-  }
 }
 
 function fileSystem(options: StorageOptions): StorageFileSystem {

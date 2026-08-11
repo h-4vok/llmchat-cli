@@ -15,11 +15,10 @@ function input(root, platform = 'win32') {
   return { platform, home: root, env };
 }
 
-const verifiedBackup = { excludeAndVerify: () => true };
 const verifiedAccess = { secureDirectory: () => true, secureFile: () => true };
 
-test('storage applies user-only modes and verifies platform backup exclusion', () => {
-  const calls = { mkdir: [], chmod: [], writeFile: [], backup: [] };
+test('storage applies user-only modes without a backup integration', () => {
+  const calls = { mkdir: [], chmod: [], writeFile: [] };
   const fileSystem = {
     mkdir(path, options) {
       calls.mkdir.push({ path, options });
@@ -39,12 +38,6 @@ test('storage applies user-only modes and verifies platform backup exclusion', (
   const paths = ensureProviderStorage('gemini', {
     input: input('/data', 'linux'),
     fileSystem,
-    backupExclusion: {
-      excludeAndVerify(path, platform) {
-        calls.backup.push({ path, platform });
-        return true;
-      },
-    },
   });
 
   assert.equal(calls.mkdir.length, 5);
@@ -54,21 +47,19 @@ test('storage applies user-only modes and verifies platform backup exclusion', (
     calls.mkdir.map(({ path }) => ({ path, mode: 0o700 })),
   );
   assert.deepEqual(calls.writeFile, []);
-  assert.deepEqual(calls.backup, [{ path: paths.root, platform: 'linux' }]);
+  assert.match(paths.root, /llmchat$/);
 
   calls.chmod.length = 0;
   ensureProviderStorage('gemini', {
     input: input('C:\\Local'),
     fileSystem,
     accessControl: verifiedAccess,
-    backupExclusion: { excludeAndVerify: () => true },
   });
   assert.deepEqual(calls.chmod, []);
 
   const currentPaths = ensureProviderStorage('gemini', {
     fileSystem,
     accessControl: verifiedAccess,
-    backupExclusion: { excludeAndVerify: () => true },
   });
   assert.match(currentPaths.root, /llmchat$/);
 
@@ -76,18 +67,7 @@ test('storage applies user-only modes and verifies platform backup exclusion', (
   assert.doesNotThrow(() =>
     ensureProviderStorage('gemini', {
       input: input(posixRoot, 'linux'),
-      backupExclusion: verifiedBackup,
     }),
-  );
-
-  assert.throws(
-    () =>
-      ensureProviderStorage('gemini', {
-        input: input('/unsafe', 'linux'),
-        fileSystem,
-        backupExclusion: { excludeAndVerify: () => false },
-      }),
-    /Unable to verify backup exclusion/,
   );
 });
 
@@ -98,7 +78,6 @@ test('diagnostic artifacts persist while session secrets are redacted', () => {
     now: () => new Date('2026-08-11T12:34:56.000Z'),
     artifactId: () => 'artifact-1',
     accessControl: verifiedAccess,
-    backupExclusion: verifiedBackup,
   };
   const log = appendDiagnosticLog(
     'gemini',
@@ -116,7 +95,6 @@ test('diagnostic artifacts persist while session secrets are redacted', () => {
   const automaticName = saveDiagnostic('gemini', 'plain', {
     input: input(root),
     accessControl: verifiedAccess,
-    backupExclusion: verifiedBackup,
   });
 
   const logText = readFileSync(log, 'utf8');
@@ -144,7 +122,6 @@ test('text diagnostics redact structured secrets without masking ordinary prose'
     now: () => new Date('2026-08-11T12:34:56.000Z'),
     artifactId: () => 'structured',
     accessControl: verifiedAccess,
-    backupExclusion: verifiedBackup,
   });
 
   const redacted = readFileSync(path, 'utf8');
