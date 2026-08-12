@@ -12,7 +12,11 @@ import { runtimeConfig } from './config/runtime.js';
 export type ChatRuntime = {
   adapterFor(provider: string): ProviderAdapter;
   contextFor(provider: string): AdapterContext;
-  ensureSession?(provider: string, context: AdapterContext): Promise<BrowserSessionResult>;
+  ensureSession?(
+    provider: string,
+    context: AdapterContext,
+    options?: { visible?: boolean },
+  ): Promise<BrowserSessionResult>;
   releaseContext?(context: AdapterContext): void | Promise<void>;
   timeout: TimeoutOptions;
 };

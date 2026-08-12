@@ -46,11 +46,15 @@ Remove the global development link with `npm run uninstall:global`.
 The Playwright health check is deliberately manual and outside CI. It reuses the dedicated Gemini profile, validates the empty composer, and does not send a prompt. Gemini may hide the send control until text is entered; in that state health reports a deferred capability and does not claim that send was validated:
 
 ```text
-npm run build
-node dist/cli.js auth gemini
-node dist/cli.js health gemini
-node dist/cli.js chat "Reply with exactly: human-test-ok" --provider gemini --model "<exact visible model name>"
+npm run install:global
+llmchat auth gemini
+llmchat health gemini
+llmchat chat "Reply with exactly: human-test-ok" --provider gemini --model "<exact visible model name>"
 ```
+
+Use `npm run install:global` before manual CLI testing so the global `llmchat`
+command points to the current checkout. `npm run build` only compiles `dist/`
+and does not update the globally linked command.
 
 Run the final `chat` command only when intentionally performing the human test. That smoke chat validates text entry, send, and response extraction. The adapter attempts to select the exact visible model text; if that text is unavailable or selection fails, it continues with Gemini's active model as required by #8. Confirm the visible model outcome during the human smoke—the automated test does not guarantee exact selection. Gemini's web UI is volatile, so selector compatibility must also be confirmed manually after UI changes. A failed UI check keeps the provider browser available and writes redacted local diagnostics plus a provider-viewport screenshot.
 

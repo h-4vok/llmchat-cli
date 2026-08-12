@@ -27,7 +27,7 @@ export function createPersistentBrowserSessionPort(
 ): BrowserSessionPort {
   return {
     async checkSession(request) {
-      return probeSession(launcher, request);
+      return probeSession(launcher, { ...request, visible: request.visible ?? false });
     },
     async openLoginBrowser(request) {
       return openLogin(launcher, request);
@@ -39,18 +39,26 @@ async function probeSession(
   launcher: PersistentBrowserLauncher,
   request: BrowserSessionRequest,
 ): Promise<SessionAvailability> {
-  const browser = await launcher.open({ ...request, visible: false });
+  const browser = await launcher.open({ ...request, visible: request.visible ?? false });
   let preserve = false;
   try {
-    const observation = await browser.observe();
-    if (observation !== 'unknown') return observation === 'usable' ? 'usable' : 'missing';
-    preserve = true;
-    const error = unknownUiError();
-    await browser.persistFailure(error);
-    return 'indeterminate';
+    const result = await probeObservation(browser);
+    preserve = result.preserve;
+    return result.availability;
   } finally {
     if (!preserve) await browser.close();
   }
+}
+
+async function probeObservation(
+  browser: PersistentBrowserWindow,
+): Promise<{ availability: SessionAvailability; preserve: boolean }> {
+  const observation = await browser.observe();
+  if (observation === 'unknown') {
+    await browser.persistFailure(unknownUiError());
+    return { availability: 'indeterminate', preserve: true };
+  }
+  return { availability: observation === 'usable' ? 'usable' : 'missing', preserve: false };
 }
 
 async function openLogin(
@@ -71,7 +79,7 @@ async function openLogin(
           return;
         }
         yield observation;
-        if (isTerminal(observation)) return;
+        if (isTerminal(observation, request.visible)) return;
         await browser.wait();
       }
     },
@@ -85,6 +93,6 @@ function unknownUiError(): Error {
   return new Error(messages.unknownSession);
 }
 
-function isTerminal(observation: LoginObservation): boolean {
-  return ['usable', 'cancelled'].includes(observation);
+function isTerminal(observation: LoginObservation, visible: boolean): boolean {
+  return visible ? observation === 'cancelled' : ['usable', 'cancelled'].includes(observation);
 }

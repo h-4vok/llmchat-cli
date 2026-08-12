@@ -41,10 +41,10 @@ export function createRealChatRuntime(options: RealRuntimeOptions = {}): ChatRun
     contextFor(provider) {
       return toContext(provision(provider));
     },
-    ensureSession(provider, context) {
+    ensureSession(provider, context, options = {}) {
       const lease = profiles.acquire(context);
       return ensureBrowserSession(
-        { provider, profileDirectory: lease.profileDirectory },
+        { provider, profileDirectory: lease.profileDirectory, visible: options.visible },
         sessions,
         (state) => {
           diagnostics.set(context, diagnosticForBrowserSession(state, provider));

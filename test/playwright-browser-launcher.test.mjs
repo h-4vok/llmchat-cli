@@ -1,7 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { createPlaywrightBrowserLauncher } from '../dist/playwright-browser-launcher.js';
-
 function fixture(useExistingPage = false) {
   const calls = [];
   let state = 'login';
@@ -17,13 +16,7 @@ function fixture(useExistingPage = false) {
         },
         async isVisible() {
           if (rejectVisibility) throw new Error('detached');
-          const markers = {
-            login: 'Sign in',
-            captcha: 'recaptcha',
-            blocked: 'unusual traffic',
-            usable: 'rich-textarea',
-          };
-          return selector.includes(markers[state] ?? '\0');
+          return visibleForState(selector, state);
         },
       };
     },
@@ -65,14 +58,38 @@ function fixture(useExistingPage = false) {
     setUrl: (value) => (currentUrl = value),
   };
 }
-
+function visibleForState(selector, state) {
+  if (isLoginEvidence(selector, state)) return true;
+  return selector.includes(authenticatedMarker(state)) || selector.includes(stateMarker(state));
+}
+function authenticatedMarker(state) {
+  return state === 'usable' ? 'Google Account' : '\0';
+}
+function stateMarker(state) {
+  const markers = {
+    login: 'Sign in',
+    captcha: 'recaptcha',
+    blocked: 'unusual traffic',
+    usable: 'rich-textarea',
+    'unauthenticated-composer': 'rich-textarea',
+  };
+  return markers[state] ?? '\0';
+}
+function isLoginEvidence(selector, state) {
+  return (
+    state === 'unauthenticated-composer' &&
+    (selector.includes('ServiceLogin') ||
+      selector.includes('Sign in') ||
+      selector.includes('^Sign in'))
+  );
+}
 test('Playwright launcher opens the dedicated profile and normalizes provider states', async () => {
   const fake = fixture();
   const launcher = createPlaywrightBrowserLauncher(fake.options);
   const window = await launcher.open({
     provider: 'gemini',
     profileDirectory: '/profiles/gemini',
-    visible: true,
+    visible: false,
   });
   assert.equal(await window.observe(), 'login-required');
   for (const state of ['captcha', 'blocked', 'usable']) {
@@ -91,11 +108,16 @@ test('Playwright launcher opens the dedicated profile and normalizes provider st
   assert.deepEqual(fake.calls[0], [
     'launch',
     '/profiles/gemini',
-    { executablePath: process.execPath, headless: false },
+    {
+      executablePath: process.execPath,
+      headless: true,
+      timeout: 15_000,
+      ignoreDefaultArgs: ['--no-sandbox'],
+      args: ['--disable-blink-features=AutomationControlled'],
+    },
   ]);
   assert.ok(fake.calls.some(([kind]) => kind === 'new-page'));
 });
-
 test('Playwright launcher reuses an existing page, supports hidden probes, and rejects providers', async () => {
   const fake = fixture(true);
   const launcher = createPlaywrightBrowserLauncher(fake.options);
@@ -115,7 +137,14 @@ test('Playwright launcher reuses an existing page, supports hidden probes, and r
     /No browser login URL/,
   );
 });
-
-test('default launcher construction does not activate a browser', () => {
-  assert.doesNotThrow(() => createPlaywrightBrowserLauncher());
+test('visible composer alone never proves authentication', async () => {
+  const fake = fixture(true);
+  fake.setState('unauthenticated-composer');
+  const launcher = createPlaywrightBrowserLauncher(fake.options);
+  const window = await launcher.open({
+    provider: 'gemini',
+    profileDirectory: '/profiles/gemini',
+    visible: true,
+  });
+  assert.equal(await window.observe(), 'login-required');
 });

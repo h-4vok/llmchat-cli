@@ -21,8 +21,10 @@ test('Windows and macOS notifications pass content as process arguments', async 
       });
       await port.send(notification);
       assert.equal(calls.length, 1);
-      assert.ok(calls[0][1].includes(notification.title));
-      assert.ok(calls[0][1].includes(notification.message));
+      assert.match(
+        calls[0][1].join(' '),
+        new RegExp(platform === 'win32' ? 'FromBase64String' : notification.message),
+      );
     });
   }
 });

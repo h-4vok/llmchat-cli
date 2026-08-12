@@ -114,7 +114,7 @@ async function runAuth(args: string[], output: Output, runtime: ChatRuntime): Pr
   if (args.length !== 1) throw new Error('Usage: llmchat auth <provider>.');
   const provider = validatedProvider(args[0]);
   await withRuntimeContext(runtime, provider, async (context) => {
-    const session = requireSession(runtime, provider, context);
+    const session = requireSession(runtime, provider, context, { visible: true });
     const result = session ? await session : undefined;
     emitAuthSuccess(output, result);
   });
@@ -131,11 +131,9 @@ async function runHealth(args: string[], output: Output, runtime: ChatRuntime): 
   if (args.length !== 1) throw new Error('Usage: llmchat health <provider>.');
   const provider = validatedProvider(args[0]);
   await withRuntimeContext(runtime, provider, async (context) => {
-    const session = requireSession(runtime, provider, context);
-    if (session) await session;
     const health = await runtime.adapterFor(provider).checkHealth(context);
-    output.emit({ speaker: provider, message: health.message });
     if (health.status === 'broken') throw new Error(health.message);
+    output.emit({ speaker: 'llmchat', message: health.message });
   });
 }
 
@@ -151,8 +149,9 @@ function requireSession(
   runtime: ChatRuntime,
   provider: string,
   context: ReturnType<ChatRuntime['contextFor']>,
+  options?: { visible?: boolean },
 ): Promise<BrowserSessionResult> | undefined {
-  return runtime.ensureSession?.(provider, context).then((result) => {
+  return runtime.ensureSession?.(provider, context, options).then((result) => {
     if (result.status === 'indeterminate') throw new Error(messages.geminiLoginRequired);
     if (result.status === 'cancelled') throw new Error(`${provider} authentication was cancelled.`);
     return result;

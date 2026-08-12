@@ -7,6 +7,9 @@ export async function withRuntimeContext(
   use: (context: AdapterContext) => Promise<void>,
 ): Promise<void> {
   const context = runtime.contextFor(provider);
-  await use(context);
-  await runtime.releaseContext?.(context);
+  try {
+    await use(context);
+  } finally {
+    await runtime.releaseContext?.(context);
+  }
 }

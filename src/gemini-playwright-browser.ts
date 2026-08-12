@@ -8,6 +8,7 @@ import { createGeminiUiConversation, type GeminiUiPage } from './gemini-ui-conve
 import { saveDiagnostic, saveScreenshot } from './secure-storage.js';
 import type { NativeNotificationPort } from './native-notification.js';
 import { geminiConfig } from './config/gemini.js';
+import { runtimeConfig } from './config/runtime.js';
 
 export type GeminiPlaywrightOptions = {
   platform: NodeJS.Platform;
@@ -35,14 +36,35 @@ export function createPlaywrightGeminiBrowser(
           await persistHealthFailure(page, options, health.message);
           return health;
         }
-        await page.close();
         return health;
       } catch (failure) {
-        await persistHealthFailure(page, options, errorMessage(failure));
+        await tryPersistHealthFailure(page, options, errorMessage(failure));
         throw failure;
+      } finally {
+        await tryClose(page);
       }
     },
   };
+}
+
+async function tryPersistHealthFailure(
+  page: GeminiUiPage,
+  options: GeminiPlaywrightOptions,
+  message: string,
+): Promise<void> {
+  try {
+    await persistHealthFailure(page, options, message);
+  } catch {
+    return;
+  }
+}
+
+async function tryClose(page: GeminiUiPage): Promise<void> {
+  try {
+    await page.close();
+  } catch {
+    return;
+  }
 }
 
 async function persistHealthFailure(
@@ -67,27 +89,53 @@ async function openPage(
   const browser = await options.chromium.launchPersistentContext(context.profileDirectory, {
     executablePath,
     headless: false,
+    timeout: 15_000,
+    ignoreDefaultArgs: ['--no-sandbox'],
+    args: ['--disable-blink-features=AutomationControlled'],
   });
   return wrapFirstPage(browser);
 }
 
 async function wrapFirstPage(context: BrowserContext): Promise<GeminiUiPage> {
-  const page = context.pages()[0] ?? (await context.newPage());
+  const pages = context.pages();
+  const page = pages[0] ?? (await context.newPage());
+  await Promise.all(pages.slice(1).map((extra) => extra.close().catch(() => undefined)));
   return createGeminiPlaywrightPage(page, context);
 }
 
 async function inspectHealth(page: GeminiUiPage): Promise<AdapterHealth> {
-  const composer = await page.element('composer').visible();
-  const send = await page.element('send').visible();
-  if (!composer)
+  if (!(await waitForVisible(page, 'composer')))
     return { status: 'broken', message: 'Gemini UI changed: composer selector is missing.' };
-  if (!send) {
+  if (!(await waitForVisible(page, 'model')))
+    return { status: 'broken', message: 'Gemini UI changed: model selector is missing.' };
+  await page.element('composer').fill('health check');
+  if (!(await waitForVisible(page, 'send')))
     return {
-      status: 'degraded',
-      message: 'Gemini composer is ready; send appears after text entry and was not validated.',
+      status: 'broken',
+      message: 'Gemini UI changed: send button is missing after text entry.',
     };
+  return {
+    status: 'healthy',
+    message:
+      'Gemini page found. Composer found. Model selector found. Send button found after text entry.',
+  };
+}
+
+async function waitForVisible(
+  page: GeminiUiPage,
+  element: Parameters<GeminiUiPage['element']>[0],
+): Promise<boolean> {
+  const deadline = Date.now() + healthElementTimeout();
+  while (Date.now() <= deadline) {
+    if (page.closed()) return false;
+    if (await page.element(element).visible()) return true;
+    await page.wait();
   }
-  return { status: 'healthy', message: 'Gemini UI selectors are ready.' };
+  return false;
+}
+
+function healthElementTimeout(): number {
+  return runtimeConfig.timeouts.healthElementMs;
 }
 
 function artifactPort(options: GeminiPlaywrightOptions) {

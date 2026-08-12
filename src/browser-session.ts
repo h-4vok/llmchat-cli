@@ -8,6 +8,7 @@ export type LoginObservation =
 export type BrowserSessionRequest = {
   provider: string;
   profileDirectory: string;
+  visible?: boolean;
 };
 
 export type LoginBrowserRequest = BrowserSessionRequest & {
@@ -75,6 +76,7 @@ export async function ensureBrowserSession(
   ports: BrowserSessionPorts,
   observer?: BrowserSessionObserver,
 ): Promise<BrowserSessionResult> {
+  if (request.visible) return ensureVisibleBrowserSession(request, ports, observer);
   const checking: BrowserSessionState = { status: 'checking' };
   report(observer, checking);
   const availability = await ports.browser.checkSession(request);
@@ -93,6 +95,47 @@ export async function ensureBrowserSession(
   }
 }
 
+async function ensureVisibleBrowserSession(
+  request: BrowserSessionRequest,
+  ports: BrowserSessionPorts,
+  observer?: BrowserSessionObserver,
+): Promise<BrowserSessionResult> {
+  const checking: BrowserSessionState = { status: 'checking' };
+  report(observer, checking);
+  const required = transitionBrowserSession(checking, { type: 'session-required' });
+  report(observer, required);
+  const login = await ports.browser.openLoginBrowser({ ...request, visible: true });
+  try {
+    try {
+      await ports.notifications.send(authenticationAttention(request.provider));
+    } catch {
+      // The browser remains the source of truth for manual authentication.
+    }
+    return await waitForVisibleLogin(login, request, ports, required, observer);
+  } finally {
+    await login.close();
+  }
+}
+async function waitForVisibleLogin(
+  login: LoginBrowser,
+  request: BrowserSessionRequest,
+  ports: BrowserSessionPorts,
+  initialState: BrowserSessionState,
+  observer?: BrowserSessionObserver,
+): Promise<BrowserSessionResult> {
+  let state = initialState;
+  for await (const observation of login.observeSession()) {
+    state = transitionBrowserSession(state, { type: 'login-observed', observation });
+    report(observer, state);
+    if (observation !== 'cancelled') continue;
+    const availability = await ports.browser.checkSession({ ...request, visible: false });
+    if (availability === 'usable') {
+      return report(observer, { status: 'ready', source: 'authenticated' });
+    }
+    return report(observer, { status: 'cancelled' });
+  }
+  throw new Error(messages.loginStopped);
+}
 async function waitForLogin(
   login: LoginBrowser,
   initialState: BrowserSessionState,
@@ -107,13 +150,11 @@ async function waitForLogin(
   }
   throw new Error(messages.loginStopped);
 }
-
 function terminalResult(state: BrowserSessionState): BrowserSessionResult | undefined {
   if (state.status === 'ready' || state.status === 'cancelled' || state.status === 'indeterminate')
     return state;
   return undefined;
 }
-
 function report<State extends BrowserSessionState>(
   observer: BrowserSessionObserver | undefined,
   state: State,

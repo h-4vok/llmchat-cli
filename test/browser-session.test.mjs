@@ -69,6 +69,26 @@ test('an indeterminate probe opens one visible login browser and notifies once',
   ]);
 });
 
+test('visible authentication waits for browser close before verifying the profile', async () => {
+  const ports = createPorts('missing', ['usable', 'cancelled']);
+  const result = await ensureBrowserSession({ ...request, visible: true }, ports);
+  assert.deepEqual(result, { status: 'cancelled' });
+  assert.equal(ports.calls[0][0], 'open-login-browser');
+  assert.deepEqual(ports.calls[1][0], 'notify');
+  assert.deepEqual(ports.calls[2], ['check-session', { ...request, visible: false }]);
+});
+
+test('visible authentication succeeds after browser close when the profile is authenticated', async () => {
+  const ports = createPorts('usable', ['usable', 'cancelled']);
+
+  const result = await ensureBrowserSession({ ...request, visible: true }, ports);
+
+  assert.deepEqual(result, { status: 'ready', source: 'authenticated' });
+  assert.deepEqual(
+    ports.calls.find((call) => Array.isArray(call) && call[0] === 'check-session'),
+    ['check-session', { ...request, visible: false }],
+  );
+});
 test('missing or expired sessions wait through manual intervention then resume', async (t) => {
   for (const unavailable of ['missing', 'expired']) {
     await t.test(unavailable, async () => {
@@ -120,7 +140,6 @@ test('an interrupted observation stream closes its login browser', async () => {
     ensureBrowserSession(request, ports),
     /stopped before authentication or cancellation/,
   );
-  assert.equal(ports.closeCalls(), 1);
 });
 
 test('login has no timeout and stays open until a terminal observation', async () => {

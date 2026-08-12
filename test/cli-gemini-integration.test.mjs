@@ -132,9 +132,9 @@ test('health gemini checks required UI without sending a prompt', async () => {
   );
   assert.deepEqual(
     calls.map((call) => call[0]),
-    ['context', 'session', 'adapter', 'health'],
+    ['context', 'adapter', 'health'],
   );
-  assert.deepEqual(events, [{ speaker: 'gemini', message: 'ready' }]);
+  assert.deepEqual(events, [{ speaker: 'llmchat', message: 'ready' }]);
 });
 
 test('explicit authentication cancellation stops chat safely', async () => {

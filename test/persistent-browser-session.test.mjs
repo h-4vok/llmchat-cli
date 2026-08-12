@@ -60,14 +60,14 @@ test('visible login observation terminates on explicit browser cancellation', as
 });
 
 test('visible login observation preserves verification until usable', async () => {
-  const fake = launcher('captcha', 'blocked', 'usable');
+  const fake = launcher('captcha', 'blocked', 'usable', 'cancelled');
   const port = createPersistentBrowserSessionPort(fake.port);
   const login = await port.openLoginBrowser({ ...request, visible: true });
   const seen = [];
 
   for await (const state of login.observeSession()) seen.push(state);
 
-  assert.deepEqual(seen, ['captcha', 'blocked', 'usable']);
+  assert.deepEqual(seen, ['captcha', 'blocked', 'usable', 'cancelled']);
   assert.equal(fake.closed(), 0);
   await login.close();
   assert.equal(fake.closed(), 1);

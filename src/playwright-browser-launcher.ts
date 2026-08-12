@@ -20,13 +20,17 @@ const sessionSelectors = {
   captcha: geminiSelectors.captcha,
   composer: geminiSelectors.composer,
   login: geminiSelectors.login,
+  loginText: geminiSelectors.loginText,
+  authenticated: geminiSelectors.authenticated,
 };
 
 const observations = [
   [sessionSelectors.captcha, 'captcha'],
   [sessionSelectors.blocked, 'blocked'],
-  [sessionSelectors.composer, 'usable'],
   [sessionSelectors.login, 'login-required'],
+  [sessionSelectors.loginText, 'login-required'],
+  [sessionSelectors.authenticated, 'usable'],
+  [sessionSelectors.composer, 'usable'],
 ] as const;
 
 export type PlaywrightLauncherOptions = {
@@ -58,10 +62,20 @@ async function launchBrowser(
   const context = await options.chromium.launchPersistentContext(request.profileDirectory, {
     executablePath,
     headless: !request.visible,
+    timeout: runtimeConfig.timeouts.browserLaunchMs,
+    ignoreDefaultArgs: ['--no-sandbox'],
+    args: ['--disable-blink-features=AutomationControlled'],
   });
-  const page = context.pages()[0] ?? (await context.newPage());
+  const page = await preparePage(context);
   await page.goto(url);
   return playwrightWindow(context, page, request, options);
+}
+
+async function preparePage(context: BrowserContext): Promise<Page> {
+  const pages = context.pages();
+  const page = pages[0] ?? (await context.newPage());
+  await Promise.all(pages.slice(1).map((extra) => extra.close().catch(() => undefined)));
+  return page;
 }
 
 function runtimeOptions(): PlaywrightLauncherOptions {
@@ -81,10 +95,15 @@ function playwrightWindow(
   options: PlaywrightLauncherOptions,
 ): PersistentBrowserWindow {
   return {
-    observe: () => observe(page),
-    wait: () => page.waitForTimeout(runtimeConfig.intervals.sessionPollMs),
+    observe: () => observe(page, request.visible),
+    wait: () =>
+      page
+        .waitForTimeout(runtimeConfig.intervals.sessionPollMs)
+        .catch((error) =>
+          page.isClosed() || String(error).includes('closed') ? undefined : Promise.reject(error),
+        ),
     persistFailure: (error) => persistLauncherFailure(context, page, request, options, error),
-    close: () => context.close(),
+    close: () => context.close().catch(() => undefined),
   };
 }
 
@@ -104,15 +123,29 @@ async function persistLauncherFailure(
   await persistGeminiFailure(createGeminiPlaywrightPage(page, context), artifacts, error);
 }
 
-async function observe(page: Page): Promise<PersistentBrowserObservation> {
+async function observe(page: Page, visibleSession: boolean): Promise<PersistentBrowserObservation> {
   if (page.isClosed()) return 'cancelled';
-  return observeOpenPage(page);
+  return observeOpenPage(page, visibleSession);
 }
 
-async function observeOpenPage(page: Page): Promise<PersistentBrowserObservation> {
-  for (const [selector, observation] of observations) {
+async function observeOpenPage(
+  page: Page,
+  visibleSession: boolean,
+): Promise<PersistentBrowserObservation> {
+  for (const [selector, observation] of observationsFor(visibleSession)) {
     if (await visible(page, selector)) return observation;
   }
+  return fallbackObservation(page, visibleSession);
+}
+
+function observationsFor(visibleSession: boolean) {
+  return visibleSession
+    ? observations.filter(([selector]) => selector !== sessionSelectors.composer)
+    : observations;
+}
+
+function fallbackObservation(page: Page, visibleSession: boolean): PersistentBrowserObservation {
+  if (visibleSession) return 'login-required';
   return page.url().startsWith(geminiConfig.accountUrlPrefix) ? 'login-required' : 'unknown';
 }
 

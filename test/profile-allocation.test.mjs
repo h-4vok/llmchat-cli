@@ -97,7 +97,13 @@ test('derived concurrent profile is the real persistent launch argument', async 
 
   assert.deepEqual(calls[0], [
     `${stable}.concurrent-1`,
-    { executablePath: process.execPath, headless: false },
+    {
+      executablePath: process.execPath,
+      headless: false,
+      timeout: 15_000,
+      ignoreDefaultArgs: ['--no-sandbox'],
+      args: ['--disable-blink-features=AutomationControlled'],
+    },
   ]);
   await browser.close();
   lease.release();

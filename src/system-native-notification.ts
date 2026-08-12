@@ -28,8 +28,10 @@ export function createSystemNotificationPort(
 }
 
 function windowsCommand(notification: NativeNotification): [string, string[]] {
+  const title = encodePowerShellText(notification.title);
+  const message = encodePowerShellText(notification.message);
   const script = [
-    '$title=$args[0];$message=$args[1]',
+    `$title=${title};$message=${message}`,
     '[Windows.Data.Xml.Dom.XmlDocument,Windows.Data.Xml.Dom.XmlDocument,ContentType=WindowsRuntime]>$null',
     '$xml=[Windows.Data.Xml.Dom.XmlDocument]::new()',
     '$xml.LoadXml(\'<toast><visual><binding template="ToastGeneric"><text></text><text></text></binding></visual></toast>\')',
@@ -39,10 +41,12 @@ function windowsCommand(notification: NativeNotification): [string, string[]] {
     '$toast=[Windows.UI.Notifications.ToastNotification]::new($xml)',
     '[Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier("LLM Chat").Show($toast)',
   ].join(';');
-  return [
-    'powershell.exe',
-    ['-NoProfile', '-NonInteractive', '-Command', script, notification.title, notification.message],
-  ];
+  return ['powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script]];
+}
+
+function encodePowerShellText(value: string): string {
+  const bytes = Buffer.from(value, 'utf16le').toString('base64');
+  return `[Text.Encoding]::Unicode.GetString([Convert]::FromBase64String('${bytes}'))`;
 }
 
 function macCommand(notification: NativeNotification): [string, string[]] {
