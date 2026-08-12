@@ -103,6 +103,36 @@ test('CLI adapter execution failures use the same observable failure flow', asyn
   ]);
 });
 
+test('CLI output redacts credential, session, secret, and id token assignments', async () => {
+  const { events, output } = outputEvents();
+  const adapter = {
+    provider: 'gemini',
+    async executeChat() {
+      throw new Error(
+        'credential=one&credentials=two&session=three&secret=four&id_token=five&safe=visible',
+      );
+    },
+    async diagnose() {
+      return { state: 'error', message: 'unused' };
+    },
+    async checkHealth() {
+      return { status: 'healthy', message: 'ready' };
+    },
+  };
+  assert.equal(
+    await runCliProcess(['chat', '--provider', 'gemini', 'hello'], output, {
+      adapterFor: () => adapter,
+      contextFor: () => context,
+      timeout: { timeoutMs: 10, schedule: () => () => {} },
+    }),
+    1,
+  );
+  assert.equal(
+    events[0].message,
+    '[error] credential=[REDACTED]&credentials=[REDACTED]&session=[REDACTED]&secret=[REDACTED]&id_token=[REDACTED]&safe=visible',
+  );
+});
+
 test('the default offline adapter exposes normalized health, diagnosis, and neutral context', async () => {
   const runtime = createChatRuntime(() => ({
     profileDirectory: 'profiles/gemini',

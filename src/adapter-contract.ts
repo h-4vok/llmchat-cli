@@ -19,8 +19,10 @@ export type AdapterNotification = {
 export type AdapterContext = {
   profileDirectory: string;
   diagnosticsDirectory: string;
+  screenshotsDirectory: string;
   configuration: Readonly<Record<string, unknown>>;
   notify(notification: AdapterNotification): void;
+  onActivity?(listener: () => void): () => void;
 };
 
 export type ChatRequest = {
@@ -71,22 +73,55 @@ export async function executeWithTimeout<
   context: AdapterContext,
   options: TimeoutOptions,
 ): Promise<Response> {
-  const schedule = options.schedule ?? scheduleTimeout;
-  let cancel!: () => void;
-  const timeout = new Promise<TimeoutOutcome>((resolve) => {
-    cancel = schedule(() => resolve(timeoutOutcome), options.timeoutMs);
-  });
+  const schedule = timeoutScheduler(options);
+  const inactivity = createInactivityTimer(schedule, options.timeoutMs);
+  const unsubscribe = subscribeToActivity(context, inactivity.reset);
   const operation = Promise.resolve()
     .then(() => adapter.executeChat(request, context))
     .then((response): ResponseOutcome<Response> => ({ kind: 'response', response }));
   let outcome: ResponseOutcome<Response> | TimeoutOutcome;
   try {
-    outcome = await Promise.race([operation, timeout]);
+    outcome = await Promise.race([operation, inactivity.outcome]);
   } finally {
-    cancel();
+    inactivity.cancel();
+    unsubscribe();
   }
   if (outcome.kind === 'response') return outcome.response;
   throw new AdapterTimeoutError(await adapter.diagnose(context));
+}
+
+function timeoutScheduler(options: TimeoutOptions): TimeoutScheduler {
+  return options.schedule ?? scheduleTimeout;
+}
+
+function subscribeToActivity(context: AdapterContext, reset: () => void): () => void {
+  return context.onActivity ? context.onActivity(reset) : ignore;
+}
+
+function createInactivityTimer(schedule: TimeoutScheduler, timeoutMs: number) {
+  let cancelTimer = ignore;
+  let version = 0;
+  let resolveTimeout!: (outcome: TimeoutOutcome) => void;
+  const outcome = new Promise<TimeoutOutcome>((resolve) => {
+    resolveTimeout = resolve;
+  });
+  const reset = () => {
+    cancelTimer();
+    const expectedVersion = ++version;
+    cancelTimer = schedule(() => expire(expectedVersion), timeoutMs);
+  };
+  const expire = (expectedVersion: number) => {
+    if (expectedVersion === version) resolveTimeout(timeoutOutcome);
+  };
+  reset();
+  return {
+    outcome,
+    reset,
+    cancel() {
+      version += 1;
+      cancelTimer();
+    },
+  };
 }
 
 export function runHealthCheck(
@@ -100,3 +135,5 @@ function scheduleTimeout(expire: () => void, timeoutMs: number): () => void {
   const timer = setTimeout(expire, timeoutMs);
   return () => clearTimeout(timer);
 }
+
+function ignore(): void {}

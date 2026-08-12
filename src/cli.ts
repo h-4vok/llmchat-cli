@@ -1,9 +1,10 @@
 #!/usr/bin/env node
 import { runCliProcess } from './cli-app.js';
 import { createOutput } from './output.js';
+import { createRealChatRuntime } from './real-chat-runtime.js';
 
 const output = createOutput({
   write: (line) => process.stdout.write(`${line}\n`),
 });
 
-process.exitCode = await runCliProcess(process.argv.slice(2), output);
+process.exitCode = await runCliProcess(process.argv.slice(2), output, createRealChatRuntime());

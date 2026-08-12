@@ -90,6 +90,14 @@ test('diagnostic artifacts persist while session secrets are redacted', () => {
     options,
   );
   appendDiagnosticLog('gemini', { message: 'second entry' }, options);
+  appendDiagnosticLog(
+    'gemini',
+    {
+      message:
+        'credential=one&credentials=two&session=three&secret=four&id_token=five&safe=visible',
+    },
+    options,
+  );
   const diagnostic = saveDiagnostic('gemini', 'cookie=session-value', options);
   const screenshot = saveScreenshot('gemini', new Uint8Array([1, 2, 3]), options);
   const automaticName = saveDiagnostic('gemini', 'plain', {
@@ -101,6 +109,10 @@ test('diagnostic artifacts persist while session secrets are redacted', () => {
   assert.match(logText, /Keep this prompt/);
   assert.match(logText, /Keep this response/);
   assert.match(logText, /second entry/);
+  assert.match(
+    logText,
+    /credential=\[REDACTED\]&credentials=\[REDACTED\]&session=\[REDACTED\]&secret=\[REDACTED\]&id_token=\[REDACTED\]&safe=visible/,
+  );
   assert.doesNotMatch(logText, /hidden|secret-token|secret-password|must-not-be-serialized/);
   assert.equal(readFileSync(diagnostic, 'utf8'), 'cookie=[REDACTED]');
   assert.deepEqual(readFileSync(screenshot), Buffer.from([1, 2, 3]));
