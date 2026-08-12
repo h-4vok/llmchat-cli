@@ -1,12 +1,17 @@
 import { executeWithTimeout } from './adapter-contract.js';
 import { defaultChatRuntime, type ChatRuntime } from './chat-runtime.js';
 import { parseChat } from './cli-args.js';
-import { readCurrentConfig, removeDefaultProvider, saveDefaultProvider } from './config.js';
+import { printConfigHelp, printRootHelp } from './cli-help.js';
+import { removeDefaultProvider, saveDefaultProvider } from './config.js';
 import { errorMessage } from './error-format.js';
 import type { Output } from './output.js';
+import { selectedProvider, validatedProvider } from './provider-selection.js';
 import { redactSessionSecrets } from './secret-redaction.js';
+import { withRuntimeContext } from './runtime-context.js';
+import { messages } from './config/messages.js';
+import { runtimeConfig } from './config/runtime.js';
+import type { BrowserSessionResult } from './browser-session.js';
 
-const supportedProvider = 'gemini';
 type CommandHandler = (
   args: string[],
   output: Output,
@@ -15,8 +20,10 @@ type CommandHandler = (
 type ConfigHandler = (args: string[]) => void;
 
 const commandHandlers: Record<string, CommandHandler> = {
+  auth: runAuth,
   chat: runChat,
   config: runConfig,
+  health: runHealth,
 };
 
 export async function runCli(
@@ -38,14 +45,14 @@ export async function runCliProcess(
 ): Promise<0 | 1> {
   try {
     await runCli(args, output, runtime);
-    return 0;
+    return runtimeConfig.exitCode.success;
   } catch (error) {
     output.emit({
       speaker: 'llmchat',
       tone: 'error',
       message: redactSessionSecrets(errorMessage(error)),
     });
-    return 1;
+    return runtimeConfig.exitCode.failure;
   }
 }
 
@@ -72,8 +79,7 @@ const configActions: Record<string, ConfigHandler> = {
 function setDefaultProvider(args: string[]): void {
   if (args.length !== 2)
     throw new Error('Invalid config command. Use "llmchat config --help" for usage.');
-  validateProvider(args[1]);
-  saveDefaultProvider(args[1]);
+  saveDefaultProvider(validatedProvider(args[1]));
 }
 
 function clearDefaultProvider(args: string[]): void {
@@ -88,71 +94,67 @@ async function runChat(args: string[], output: Output, runtime: ChatRuntime): Pr
   if (!parsed.prompt) throw new Error('A prompt is required.');
   const provider = selectedProvider(parsed.provider);
   const request = {
+    model: parsed.model,
     prompt: parsed.prompt,
     systemInstructions: parsed.systemInstructions,
   };
-  const context = runtime.contextFor(provider);
-  const adapter = runtime.adapterFor(provider);
-  const response = await executeWithTimeout(adapter, request, context, runtime.timeout);
-  output.emit({
-    speaker: provider,
-    message: response.text,
+  await withRuntimeContext(runtime, provider, async (context) => {
+    const session = awaitSessionIfNeeded(runtime, provider, context);
+    if (session) await session;
+    const adapter = runtime.adapterFor(provider);
+    const response = await executeWithTimeout(adapter, request, context, runtime.timeout);
+    output.emit({
+      speaker: provider,
+      message: response.text,
+    });
   });
 }
 
-function selectedProvider(override: string | undefined): string {
-  if (override) return validatedProvider(override);
-  const provider = readCurrentConfig().defaultProvider;
-  if (!provider) throw new Error(noProviderMessage());
-  return validatedProvider(provider);
-}
-
-function validatedProvider(provider: string): string {
-  validateProvider(provider);
-  return provider;
-}
-
-function validateProvider(provider: string): void {
-  if (provider !== supportedProvider) {
-    throw new Error(
-      `Unsupported provider "${provider}". Supported providers: ${supportedProvider}.`,
-    );
-  }
-}
-
-function noProviderMessage(): string {
-  return 'No provider selected. Set a default with "llmchat config set-default-provider gemini" or pass "--provider gemini".';
-}
-
-function printRootHelp(output: Output): void {
-  output.emit({
-    speaker: 'llmchat',
-    message: `Usage:
-  llmchat chat "<prompt>" [--provider <provider>] [--gem|--gpt|--system-instructions <name>]
-  llmchat config <set-default-provider|clear-default-provider> [provider]
-
-Supported providers: gemini
-
-System instructions: --gem, --gpt, and --system-instructions are equivalent aliases.
-
-Examples:
-  llmchat chat "hello" --provider gemini
-  llmchat config set-default-provider gemini
-  llmchat config clear-default-provider`,
+async function runAuth(args: string[], output: Output, runtime: ChatRuntime): Promise<void> {
+  if (args.length !== 1) throw new Error('Usage: llmchat auth <provider>.');
+  const provider = validatedProvider(args[0]);
+  await withRuntimeContext(runtime, provider, async (context) => {
+    const session = requireSession(runtime, provider, context);
+    const result = session ? await session : undefined;
+    emitAuthSuccess(output, result);
   });
 }
 
-function printConfigHelp(output: Output): void {
-  output.emit({
-    speaker: 'llmchat',
-    message: `Usage:
-  llmchat config set-default-provider <provider>
-  llmchat config clear-default-provider
+function emitAuthSuccess(output: Output, result: BrowserSessionResult | undefined): void {
+  if (result?.status !== 'ready') return;
+  const message =
+    result.source === 'reused' ? messages.auth.sessionReused : messages.auth.sessionAuthenticated;
+  output.emit({ speaker: 'llmchat', message });
+}
 
-Supported providers: gemini
+async function runHealth(args: string[], output: Output, runtime: ChatRuntime): Promise<void> {
+  if (args.length !== 1) throw new Error('Usage: llmchat health <provider>.');
+  const provider = validatedProvider(args[0]);
+  await withRuntimeContext(runtime, provider, async (context) => {
+    const session = requireSession(runtime, provider, context);
+    if (session) await session;
+    const health = await runtime.adapterFor(provider).checkHealth(context);
+    output.emit({ speaker: provider, message: health.message });
+    if (health.status === 'broken') throw new Error(health.message);
+  });
+}
 
-Examples:
-  llmchat config set-default-provider gemini
-  llmchat config clear-default-provider`,
+async function awaitSessionIfNeeded(
+  runtime: ChatRuntime,
+  provider: string,
+  context: ReturnType<ChatRuntime['contextFor']>,
+): Promise<void> {
+  await requireSession(runtime, provider, context);
+}
+
+function requireSession(
+  runtime: ChatRuntime,
+  provider: string,
+  context: ReturnType<ChatRuntime['contextFor']>,
+): Promise<BrowserSessionResult> | undefined {
+  return runtime.ensureSession?.(provider, context).then((result) => {
+    if (result.status === 'indeterminate') throw new Error(messages.geminiLoginRequired);
+    if (result.status === 'cancelled') throw new Error(`${provider} authentication was cancelled.`);
+    return result;
   });
 }

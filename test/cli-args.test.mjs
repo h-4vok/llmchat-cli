@@ -5,10 +5,15 @@ import { parseChat } from '../dist/cli-args.js';
 test('parseChat collects prompt words and provider options', () => {
   assert.deepEqual(parseChat(['hello', 'world', '--provider', 'gemini']), {
     help: false,
+    model: undefined,
     prompt: 'hello world',
     provider: 'gemini',
     systemInstructions: undefined,
   });
+});
+
+test('parseChat preserves the visible model text exactly', () => {
+  assert.equal(parseChat(['hello', '--model', 'Gemini 2.5 Pro']).model, 'Gemini 2.5 Pro');
 });
 
 test('parseChat leaves the prompt unset when no prompt words are provided', () => {
@@ -32,6 +37,7 @@ test('parseChat recognizes help without parsing the remaining arguments', () => 
 
 test('parseChat rejects missing option values', () => {
   assert.throws(() => parseChat(['--provider']), /--provider requires a value/);
+  assert.throws(() => parseChat(['--model']), /--model requires a value/);
   assert.throws(() => parseChat(['--gem', '--provider', 'gemini']), /--gem requires a value/);
 });
 

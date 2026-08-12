@@ -4,12 +4,16 @@ import {
   type TimeoutOptions,
 } from './adapter-contract.js';
 import type { ProviderStoragePaths } from './data-path.js';
+import type { BrowserSessionResult } from './browser-session.js';
 import { sendChat } from './provider.js';
 import { ensureProviderStorage } from './secure-storage.js';
+import { runtimeConfig } from './config/runtime.js';
 
 export type ChatRuntime = {
   adapterFor(provider: string): ProviderAdapter;
   contextFor(provider: string): AdapterContext;
+  ensureSession?(provider: string, context: AdapterContext): Promise<BrowserSessionResult>;
+  releaseContext?(context: AdapterContext): void | Promise<void>;
   timeout: TimeoutOptions;
 };
 
@@ -33,16 +37,20 @@ export function createChatRuntime(
 ): ChatRuntime {
   return {
     adapterFor: () => simulationAdapter,
+    async ensureSession() {
+      return { status: 'ready', source: 'reused' };
+    },
     contextFor(provider) {
       const paths = provisionStorage(provider);
       return {
         profileDirectory: paths.profileDirectory,
         diagnosticsDirectory: paths.diagnosticsDirectory,
+        screenshotsDirectory: paths.screenshotsDirectory ?? '',
         configuration: {},
         notify: ignoreNotification,
       };
     },
-    timeout: { timeoutMs: 120_000 },
+    timeout: { timeoutMs: runtimeConfig.timeouts.geminiInactivityMs },
   };
 }
 

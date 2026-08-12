@@ -21,5 +21,6 @@ never use provider credentials, real browser profiles, or live UI checks.
 resolved; it is not part of `npm run check` or CI.
 
 Implementation agents must not approve their own work. Before human testing, the
-orchestrator launches a fresh, read-only reviewer using `$llmchat-qa-gate`. A
-`REQUEST CHANGES` blocks the package; only `PASS` permits human testing.
+orchestrator launches a fresh, read-only reviewer following
+`.codex/skills/llmchat-qa-gate/SKILL.md`. A `REQUEST CHANGES` blocks the package;
+only `PASS` permits human testing.

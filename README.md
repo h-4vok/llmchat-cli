@@ -1,20 +1,23 @@
 # llmchat-cli
 
-CLI foundation for provider-backed chat. The MVP uses a deterministic simulation so it can be used and tested without network access. All visual output uses one `stdout` flow; success exits with `0` and every failure exits with `1`.
+CLI for provider-backed chat through a dedicated persistent browser profile. Tests use deterministic injected boundaries and never access provider UI, credentials, or normal browser profiles. All visual output uses one `stdout` flow; success exits with `0` and every failure exits with `1`.
 
 ## MVP
 
 - Supported provider: `gemini`.
 - The selected default is stored in the user-local configuration directory (`$XDG_CONFIG_HOME/llmchat/config.json`, or the platform equivalent).
-- Real provider requests, authentication, streaming, and additional providers are planned for later phases.
+- Gemini authentication is completed manually in a dedicated Brave or Chromium/Chrome profile; CAPTCHA and anti-bot checks are never automated.
+- If the initial Gemini probe is indeterminate, `auth gemini` opens the dedicated visible window, reports that login is needed, and sends one native notification. Complete login there; the browser remains open with redacted diagnostics and a provider-viewport capture if Gemini's UI cannot be identified. A `chat` request in this state is never submitted and exits `1`; close the retained browser yourself after manual resolution.
 - Colors are always active in the MVP. Every visual line has an aligned speaker label, `##`, a local `[HH:MM]` timestamp, and plain text.
 
 ## Usage
 
 ```text
 llmchat config set-default-provider gemini
+llmchat auth gemini
 llmchat chat "Explain what an API is in one sentence"
-llmchat chat "Explain what an API is" --provider gemini
+llmchat chat "Explain what an API is" --provider gemini --model "Gemini 2.5 Pro"
+llmchat health gemini
 llmchat config clear-default-provider
 ```
 
@@ -38,6 +41,19 @@ llmchat chat --provider gemini "hello"
 
 Remove the global development link with `npm run uninstall:global`.
 
+## Manual Gemini health and human test
+
+The Playwright health check is deliberately manual and outside CI. It reuses the dedicated Gemini profile, validates the empty composer, and does not send a prompt. Gemini may hide the send control until text is entered; in that state health reports a deferred capability and does not claim that send was validated:
+
+```text
+npm run build
+node dist/cli.js auth gemini
+node dist/cli.js health gemini
+node dist/cli.js chat "Reply with exactly: human-test-ok" --provider gemini --model "<exact visible model name>"
+```
+
+Run the final `chat` command only when intentionally performing the human test. That smoke chat validates text entry, send, and response extraction. The adapter attempts to select the exact visible model text; if that text is unavailable or selection fails, it continues with Gemini's active model as required by #8. Confirm the visible model outcome during the human smoke—the automated test does not guarantee exact selection. Gemini's web UI is volatile, so selector compatibility must also be confirmed manually after UI changes. A failed UI check keeps the provider browser available and writes redacted local diagnostics plus a provider-viewport screenshot.
+
 This repository contains the skeleton and the first end-to-end Gemini route. Open decisions are tracked as GitHub issues.
 
 ## Adapter contract
@@ -55,6 +71,8 @@ LLM Chat data is separate from normal browser profiles:
 - Linux: `$XDG_DATA_HOME/llmchat`, falling back to `~/.local/share/llmchat`
 
 Each provider receives isolated `profiles`, `logs`, `diagnostics`, and `screenshots` directories. These directories persist until the user deletes them; the application has no automatic cleanup operation. POSIX directories are created and re-applied as `0700`, while every created or reopened file is re-applied as `0600`. Existing logs are protected before any new bytes are appended and verified again afterward; POSIX appends refuse symbolic links. On Windows, an isolated PowerShell script receives paths as process arguments, replaces inherited ACLs with one explicit Full Control rule for the current identity, and reads the ACL back before storage is accepted.
+
+Sequential commands lease and reuse the stable provider profile. If commands overlap, exclusive filesystem leases assign each additional interactive browser a persistent sibling profile named `.concurrent-N`; Chromium therefore never receives the same `userDataDir` concurrently. A secondary slot may require manual sign-in on first use, then keeps its own browser-managed session for later overlapping runs. LLM Chat creates and selects these directories but never reads, copies, or merges browser credentials. Successful commands release only the small lease directory, not profile data; a preserved failure keeps its lease while the process and browser remain available for inspection.
 
 Environment overrides and fallback homes must resolve to non-empty absolute paths; storage fails closed for empty, whitespace-only, or relative roots. Local development overrides use `.llmchat-data/`, which is ignored by Git; normal data roots are outside the repository. LLMChat stores private local data but does not integrate with or control the user's backup tools.
 
