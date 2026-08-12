@@ -18,7 +18,6 @@ const providerUrls: Record<string, string> = { gemini: geminiConfig.appUrl };
 const sessionSelectors = {
   blocked: geminiSelectors.blocked,
   captcha: geminiSelectors.captcha,
-  composer: geminiSelectors.composer,
   login: geminiSelectors.login,
   loginText: geminiSelectors.loginText,
   authenticated: geminiSelectors.authenticated,
@@ -30,7 +29,6 @@ const observations = [
   [sessionSelectors.login, 'login-required'],
   [sessionSelectors.loginText, 'login-required'],
   [sessionSelectors.authenticated, 'usable'],
-  [sessionSelectors.composer, 'usable'],
 ] as const;
 
 export type PlaywrightLauncherOptions = {
@@ -95,7 +93,7 @@ function playwrightWindow(
   options: PlaywrightLauncherOptions,
 ): PersistentBrowserWindow {
   return {
-    observe: () => observe(page, request.visible),
+    observe: () => observe(page),
     wait: () =>
       page
         .waitForTimeout(runtimeConfig.intervals.sessionPollMs)
@@ -103,7 +101,7 @@ function playwrightWindow(
           page.isClosed() || String(error).includes('closed') ? undefined : Promise.reject(error),
         ),
     persistFailure: (error) => persistLauncherFailure(context, page, request, options, error),
-    close: () => context.close().catch(() => undefined),
+    close: () => context.close(),
   };
 }
 
@@ -123,29 +121,19 @@ async function persistLauncherFailure(
   await persistGeminiFailure(createGeminiPlaywrightPage(page, context), artifacts, error);
 }
 
-async function observe(page: Page, visibleSession: boolean): Promise<PersistentBrowserObservation> {
+async function observe(page: Page): Promise<PersistentBrowserObservation> {
   if (page.isClosed()) return 'cancelled';
-  return observeOpenPage(page, visibleSession);
+  return observeOpenPage(page);
 }
 
-async function observeOpenPage(
-  page: Page,
-  visibleSession: boolean,
-): Promise<PersistentBrowserObservation> {
-  for (const [selector, observation] of observationsFor(visibleSession)) {
+async function observeOpenPage(page: Page): Promise<PersistentBrowserObservation> {
+  for (const [selector, observation] of observations) {
     if (await visible(page, selector)) return observation;
   }
-  return fallbackObservation(page, visibleSession);
+  return fallbackObservation(page);
 }
 
-function observationsFor(visibleSession: boolean) {
-  return visibleSession
-    ? observations.filter(([selector]) => selector !== sessionSelectors.composer)
-    : observations;
-}
-
-function fallbackObservation(page: Page, visibleSession: boolean): PersistentBrowserObservation {
-  if (visibleSession) return 'login-required';
+function fallbackObservation(page: Page): PersistentBrowserObservation {
   return page.url().startsWith(geminiConfig.accountUrlPrefix) ? 'login-required' : 'unknown';
 }
 

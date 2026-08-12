@@ -60,17 +60,14 @@ function fixture(useExistingPage = false) {
 }
 function visibleForState(selector, state) {
   if (isLoginEvidence(selector, state)) return true;
-  return selector.includes(authenticatedMarker(state)) || selector.includes(stateMarker(state));
-}
-function authenticatedMarker(state) {
-  return state === 'usable' ? 'Google Account' : '\0';
+  return selector.includes(stateMarker(state));
 }
 function stateMarker(state) {
   const markers = {
     login: 'Sign in',
     captcha: 'recaptcha',
     blocked: 'unusual traffic',
-    usable: 'rich-textarea',
+    usable: 'Google Account',
     'unauthenticated-composer': 'rich-textarea',
   };
   return markers[state] ?? '\0';

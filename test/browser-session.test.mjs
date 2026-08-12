@@ -54,39 +54,37 @@ test('a usable persistent session resumes without browser or notification', asyn
   assert.deepEqual(ports.calls, [['check-session', request]]);
 });
 
-test('an indeterminate probe opens one visible login browser and notifies once', async () => {
-  const ports = createPorts('indeterminate', ['usable']);
+test('an indeterminate probe stops without opening a login browser', async () => {
+  const ports = createPorts('indeterminate');
   const states = [];
 
   const result = await ensureBrowserSession(request, ports, (state) => states.push(state));
 
-  assert.deepEqual(result, { status: 'ready', source: 'authenticated' });
-  assert.equal(ports.calls.filter((call) => Array.isArray(call) && call[0] === 'notify').length, 1);
-  assert.deepEqual(states, [
-    { status: 'checking' },
-    { status: 'attention-required', reason: 'login' },
-    { status: 'ready', source: 'authenticated' },
-  ]);
+  assert.deepEqual(result, { status: 'indeterminate' });
+  assert.deepEqual(ports.calls, [['check-session', request]]);
+  assert.deepEqual(states, [{ status: 'checking' }, { status: 'indeterminate' }]);
 });
 
 test('visible authentication waits for browser close before verifying the profile', async () => {
-  const ports = createPorts('missing', ['usable', 'cancelled']);
+  const ports = createPorts('usable', ['cancelled']);
   const result = await ensureBrowserSession({ ...request, visible: true }, ports);
-  assert.deepEqual(result, { status: 'cancelled' });
+  assert.deepEqual(result, { status: 'ready', source: 'authenticated' });
   assert.equal(ports.calls[0][0], 'open-login-browser');
   assert.deepEqual(ports.calls[1][0], 'notify');
-  assert.deepEqual(ports.calls[2], ['check-session', { ...request, visible: false }]);
+  assert.equal(ports.calls[2], 'close-login-browser');
+  assert.deepEqual(ports.calls[3], ['check-session', { ...request, visible: false }]);
 });
 
-test('visible authentication succeeds after browser close when the profile is authenticated', async () => {
-  const ports = createPorts('usable', ['usable', 'cancelled']);
+test('visible authentication closes after observing an authenticated session', async () => {
+  const ports = createPorts('missing', ['usable']);
 
   const result = await ensureBrowserSession({ ...request, visible: true }, ports);
 
   assert.deepEqual(result, { status: 'ready', source: 'authenticated' });
-  assert.deepEqual(
-    ports.calls.find((call) => Array.isArray(call) && call[0] === 'check-session'),
-    ['check-session', { ...request, visible: false }],
+  assert.equal(ports.calls.includes('close-login-browser'), true);
+  assert.equal(
+    ports.calls.some((call) => Array.isArray(call) && call[0] === 'check-session'),
+    false,
   );
 });
 test('missing or expired sessions wait through manual intervention then resume', async (t) => {

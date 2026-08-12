@@ -6,6 +6,8 @@ import { createPlaywrightBrowserLauncher } from '../dist/playwright-browser-laun
 
 const ariaComposer = 'div[role="textbox"][aria-label="Enter a prompt for Gemini"]';
 const classComposer = 'div.ql-editor.textarea.new-input-ui[contenteditable="true"]';
+const accountMarker =
+  'a[gem-open-account-menu][href*="accounts.google.com/SignOutOptions"][aria-label^="Google Account:"]';
 
 function fixture(marker) {
   const calls = [];
@@ -45,10 +47,11 @@ function fixture(marker) {
   };
 }
 
-test('launcher recognizes current composer forms and anti-bot evidence', async () => {
+test('launcher recognizes account and anti-bot evidence without trusting the composer', async () => {
   for (const [marker, expected] of [
-    [ariaComposer, 'usable'],
-    [classComposer, 'usable'],
+    [accountMarker, 'usable'],
+    [ariaComposer, 'unknown'],
+    [classComposer, 'unknown'],
     ['automated queries', 'blocked'],
   ]) {
     const fake = fixture(marker);
@@ -63,7 +66,7 @@ test('launcher recognizes current composer forms and anti-bot evidence', async (
 });
 
 test('current authenticated Gemini session does not open login or wait', async () => {
-  const fake = fixture(ariaComposer);
+  const fake = fixture(accountMarker);
   const persistent = createPersistentBrowserSessionPort(
     createPlaywrightBrowserLauncher(fake.options),
   );
@@ -99,7 +102,7 @@ test('positive login evidence is distinct from unknown authenticated UI', async 
         notifications: {
           async send() {
             notifications += 1;
-            login.setMarker(ariaComposer);
+            login.setMarker(accountMarker);
           },
         },
       },
@@ -117,8 +120,9 @@ test('positive login evidence is distinct from unknown authenticated UI', async 
     await persistent.checkSession({ provider: 'gemini', profileDirectory: '/profiles/gemini' }),
     'indeterminate',
   );
+  assert.equal(drift.calls.filter(([kind]) => kind === 'wait').length, 14);
   assert.equal(
-    drift.calls.some(([kind]) => kind === 'wait' || kind === 'close'),
+    drift.calls.some(([kind]) => kind === 'close'),
     false,
   );
   assert.deepEqual(

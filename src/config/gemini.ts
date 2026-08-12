@@ -12,7 +12,7 @@ export const geminiConfig = Object.freeze({
       'a[href*="accounts.google.com/ServiceLogin"], button[aria-label="Sign in"], a[aria-label="Sign in"]',
     loginText: 'text=/^Sign in$/i',
     authenticated:
-      '[aria-label*="Google Account" i], [aria-label*="Sign out" i], a[href*="SignOutOptions"]',
+      'a[gem-open-account-menu][href*="accounts.google.com/SignOutOptions"][aria-label^="Google Account:"]',
     model:
       'button[aria-label^="Open mode picker"], button[aria-label*="mode" i], button[aria-label*="model" i], button[data-test-id*="mode" i], button[data-test-id*="model" i]',
     response: 'model-response .response-content, model-response',

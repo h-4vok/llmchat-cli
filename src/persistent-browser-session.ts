@@ -7,6 +7,7 @@ import type {
   SessionAvailability,
 } from './browser-session.js';
 import { messages } from './config/messages.js';
+import { runtimeConfig } from './config/runtime.js';
 
 export type PersistentBrowserRequest = BrowserSessionRequest & { visible: boolean };
 export type PersistentBrowserObservation = LoginObservation | 'unknown';
@@ -53,12 +54,23 @@ async function probeSession(
 async function probeObservation(
   browser: PersistentBrowserWindow,
 ): Promise<{ availability: SessionAvailability; preserve: boolean }> {
-  const observation = await browser.observe();
+  const observation = await observeSession(browser);
   if (observation === 'unknown') {
     await browser.persistFailure(unknownUiError());
     return { availability: 'indeterminate', preserve: true };
   }
   return { availability: observation === 'usable' ? 'usable' : 'missing', preserve: false };
+}
+
+async function observeSession(
+  browser: PersistentBrowserWindow,
+): Promise<PersistentBrowserObservation> {
+  for (let attempt = 0; attempt < runtimeConfig.intervals.sessionDetectionAttempts; attempt += 1) {
+    const observation = await browser.observe();
+    if (observation !== 'unknown') return observation;
+    await browser.wait();
+  }
+  return 'unknown';
 }
 
 async function openLogin(
