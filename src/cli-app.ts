@@ -97,6 +97,7 @@ async function runChat(args: string[], output: Output, runtime: ChatRuntime): Pr
     model: parsed.model,
     prompt: parsed.prompt,
     systemInstructions: parsed.systemInstructions,
+    ...(parsed.reasoning === undefined ? {} : { reasoning: parsed.reasoning }),
   };
   await withRuntimeContext(runtime, provider, async (context) => {
     const unsubscribe = context.onActivity?.((event) =>
@@ -141,12 +142,12 @@ async function runHealth(args: string[], output: Output, runtime: ChatRuntime): 
   });
 }
 
-async function awaitSessionIfNeeded(
+function awaitSessionIfNeeded(
   runtime: ChatRuntime,
   provider: string,
   context: ReturnType<ChatRuntime['contextFor']>,
-): Promise<void> {
-  await requireSession(runtime, provider, context);
+): Promise<void> | undefined {
+  return requireSession(runtime, provider, context)?.then(() => undefined);
 }
 
 function requireSession(

@@ -1,6 +1,7 @@
 export type ChatArguments = {
   help: boolean;
   model?: string;
+  reasoning?: string;
   prompt?: string;
   provider?: string;
   systemInstructions?: string;
@@ -9,6 +10,7 @@ export type ChatArguments = {
 type ParseState = {
   promptParts: string[];
   model?: string;
+  reasoning?: string;
   provider?: string;
   systemInstructions?: string;
   flag?: string;
@@ -20,12 +22,19 @@ const optionHandlers: Record<string, OptionHandler> = {
   '--gpt': parseSystemInstructions,
   '--model': parseModel,
   '--provider': parseProvider,
+  '--reasoning': parseReasoning,
   '--system-instructions': parseSystemInstructions,
 };
 
 function parseModel(_option: string, args: string[], state: ParseState): ChatArguments {
   const { value, remaining } = optionValue(args, '--model');
   state.model = value;
+  return parseRemaining(remaining, state);
+}
+
+function parseReasoning(_option: string, args: string[], state: ParseState): ChatArguments {
+  const { value, remaining } = optionValue(args, '--reasoning');
+  state.reasoning = value;
   return parseRemaining(remaining, state);
 }
 
@@ -82,11 +91,13 @@ function optionValue(args: string[], flag: string): { remaining: string[]; value
 }
 
 function parsedArguments(state: ParseState): ChatArguments {
-  return {
+  const parsed = {
     help: false,
     model: state.model,
     prompt: state.promptParts.join(' ').trim() || undefined,
     provider: state.provider,
     systemInstructions: state.systemInstructions,
-  };
+  } as ChatArguments;
+  if (state.reasoning !== undefined) parsed.reasoning = state.reasoning;
+  return parsed;
 }

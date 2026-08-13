@@ -20,3 +20,10 @@ test('provider adapter reports unresolved system instructions without fallback',
 test('provider adapter omits instructions when none are requested', () => {
   assert.equal(sendChat('gemini', { prompt: 'hello' }), 'Simulated response from gemini: hello');
 });
+
+test('provider adapter includes the requested reasoning in simulation output', () => {
+  assert.equal(
+    sendChat('gemini', { prompt: 'hello', reasoning: 'Extended thinking' }),
+    'Simulated response from gemini using reasoning "Extended thinking": hello',
+  );
+});

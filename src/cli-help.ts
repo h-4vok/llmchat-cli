@@ -4,7 +4,7 @@ export function printRootHelp(output: Output): void {
   output.emit({
     speaker: 'llmchat',
     message: `Usage:
-  llmchat chat "<prompt>" [--provider <provider>] [--model <visible name>] [--gem|--gpt|--system-instructions <name>]
+  llmchat chat "<prompt>" [--provider <provider>] [--model <visible name>] [--reasoning <value>] [--gem|--gpt|--system-instructions <name>]
   llmchat auth <provider>
   llmchat health <provider>
   llmchat config <set-default-provider|clear-default-provider> [provider]
@@ -12,6 +12,7 @@ export function printRootHelp(output: Output): void {
 Supported providers: gemini
 
 System instructions: --gem, --gpt, and --system-instructions are equivalent aliases.
+Reasoning values for Gemini: "Standard", "Extended thinking". Default: "Standard".
 
 Examples:
   llmchat chat "hello" --provider gemini

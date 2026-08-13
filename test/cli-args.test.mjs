@@ -16,6 +16,13 @@ test('parseChat preserves the visible model text exactly', () => {
   assert.equal(parseChat(['hello', '--model', 'Gemini 2.5 Pro']).model, 'Gemini 2.5 Pro');
 });
 
+test('parseChat preserves reasoning text exactly, including spaces', () => {
+  assert.equal(
+    parseChat(['hello', '--reasoning', 'Extended thinking']).reasoning,
+    'Extended thinking',
+  );
+});
+
 test('parseChat leaves the prompt unset when no prompt words are provided', () => {
   assert.equal(parseChat([]).prompt, undefined);
 });

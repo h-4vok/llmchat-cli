@@ -1,6 +1,7 @@
 export type ChatRequest = {
   prompt: string;
   systemInstructions?: string;
+  reasoning?: string;
 };
 
 function resolveSystemInstructions(provider: string, name: string): string {
@@ -19,5 +20,8 @@ export function sendChat(provider: string, request: ChatRequest): string {
   const instructions = resolvedSystemInstructions
     ? ` using system instructions ${JSON.stringify(resolvedSystemInstructions)}`
     : '';
-  return `Simulated response from ${provider}${instructions}: ${request.prompt}`;
+  const reasoning = request.reasoning
+    ? ` using reasoning ${JSON.stringify(request.reasoning)}`
+    : '';
+  return `Simulated response from ${provider}${instructions}${reasoning}: ${request.prompt}`;
 }

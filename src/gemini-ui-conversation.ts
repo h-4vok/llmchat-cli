@@ -9,6 +9,10 @@ import { createGeminiInterventionWaiter } from './gemini-intervention.js';
 import type { NativeNotificationPort } from './native-notification.js';
 import { redactDiagnosticText } from './secret-redaction.js';
 import { geminiConfig } from './config/gemini.js';
+import {
+  selectModel as selectModelFromMenu,
+  selectReasoningMode,
+} from './gemini-model-selection.js';
 
 export type GeminiElementName =
   'blocked' | 'captcha' | 'composer' | 'error' | 'login' | 'model' | 'response' | 'send' | 'stop';
@@ -19,6 +23,7 @@ export interface GeminiUiElement {
   click(): Promise<void>;
   fill(value: string): Promise<void>;
   innerText(): Promise<string>;
+  active(): Promise<boolean>;
 }
 
 export interface GeminiUiPage extends GeminiArtifactPage {
@@ -46,6 +51,8 @@ export function createGeminiUiConversation(
       await page.goto(newConversationUrl);
       await waitForIntervention(emit);
       await selectModel(page, request.model, emit);
+      if (request.reasoning !== undefined)
+        await selectReasoningMode(page, request.reasoning, request.model, emit);
       await (await required(page, 'composer')).fill(request.prompt);
       await (await required(page, 'send')).click();
       await monitor(page, emit, waitForIntervention);
@@ -63,32 +70,11 @@ async function selectModel(
 ): Promise<void> {
   if (!model) return;
   try {
-    const selected = await chooseModel(page, model, emit);
-    if (!selected) await chooseModel(page, geminiFallbackModel, emit);
+    const selected = await selectModelFromMenu(page, model, emit);
+    if (!selected) await selectModelFromMenu(page, geminiFallbackModel, emit);
   } catch {
     return;
   }
-}
-
-async function chooseModel(
-  page: GeminiUiPage,
-  model: string,
-  emit: (signal: GeminiSignal) => void,
-): Promise<boolean> {
-  const opener = page.element('model');
-  if (!(await usable(opener))) return false;
-  emit({ kind: 'activity', message: `Gemini model selection command: ${model}` });
-  await opener.click();
-  const choice = page.exactText(model);
-  if (!(await usable(choice))) return false;
-  await choice.click();
-  emit({ kind: 'activity', message: `Gemini model selector text: ${await opener.innerText()}` });
-  return true;
-}
-
-async function usable(element: GeminiUiElement): Promise<boolean> {
-  const visible = await element.visible();
-  return visible && (await element.enabled());
 }
 
 async function monitor(
@@ -117,11 +103,12 @@ async function terminalSignal(page: GeminiUiPage): Promise<GeminiSignal | undefi
 }
 
 async function required(page: GeminiUiPage, name: GeminiElementName): Promise<GeminiUiElement> {
-  const element = page.element(name);
-  if (!(await element.visible())) {
-    throw new Error(`Gemini UI changed: required ${name} selector is not visible.`);
+  for (let attempt = 0; attempt < 30; attempt += 1) {
+    const element = page.element(name);
+    if (await element.visible()) return element;
+    await page.wait();
   }
-  return element;
+  throw new Error(`Gemini UI changed: required ${name} selector is not usable.`);
 }
 
 async function diagnose(page: GeminiUiPage): Promise<{ state: string; message: string }> {
