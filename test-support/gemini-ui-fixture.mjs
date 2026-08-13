@@ -4,6 +4,7 @@ export function geminiUiFixture(options = {}) {
     activeModel: 'Flash',
     reasoning: 'Standard',
     reasoningVisible: true,
+    reasoningVisibleAfter: 0,
     reasoningStuck: false,
     buttonExtended: undefined,
     modelEnabled: true,
@@ -29,7 +30,13 @@ export function geminiUiFixture(options = {}) {
   return {
     calls,
     artifacts,
-    page: createPage(settings, calls, elements, () => (waits += 1)),
+    page: createPage(
+      settings,
+      calls,
+      elements,
+      () => (waits += 1),
+      () => waits,
+    ),
     artifactPort: createArtifactPort(artifacts),
   };
 }
@@ -100,7 +107,7 @@ function elementSent(element) {
   return element('probe', false).sent();
 }
 
-function createPage(settings, calls, elements, incrementWait) {
+function createPage(settings, calls, elements, incrementWait, currentWaits) {
   return {
     async goto(received) {
       calls.push(['goto', received]);
@@ -114,7 +121,7 @@ function createPage(settings, calls, elements, incrementWait) {
       const choice = createChoice(
         calls,
         text,
-        choiceVisible(settings, text, isFallback),
+        choiceVisible(settings, text, isFallback, currentWaits),
         choiceEnabled(settings, isFallback),
         () =>
           text === 'Extended thinking' ? elements.setReasoning() : elements.setActiveModel(text),
@@ -138,13 +145,12 @@ function createPage(settings, calls, elements, incrementWait) {
   };
 }
 
-function choiceVisible(settings, text, isFallback) {
-  if (text === 'Extended thinking') return settings.reasoningVisible;
+function choiceVisible(settings, text, isFallback, waits) {
+  if (text === 'Extended thinking')
+    return settings.reasoningVisible && settings.reasoningVisibleAfter <= waits();
   return isFallback ? settings.fallbackVisible : settings.modelVisible;
 }
-
-function choiceEnabled(settings, isFallback) {
-  return isFallback ? settings.fallbackEnabled : settings.modelEnabled;
-}
+const choiceEnabled = (settings, isFallback) =>
+  isFallback ? settings.fallbackEnabled : settings.modelEnabled;
 
 import { createArtifactPort, createChoice } from './gemini-ui-helpers.mjs';

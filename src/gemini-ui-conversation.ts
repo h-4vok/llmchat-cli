@@ -51,7 +51,8 @@ export function createGeminiUiConversation(
       await page.goto(newConversationUrl);
       await waitForIntervention(emit);
       await selectModel(page, request.model, emit);
-      await selectReasoningMode(page, request.reasoning, emit);
+      if (request.reasoning !== undefined)
+        await selectReasoningMode(page, request.reasoning, request.model, emit);
       await (await required(page, 'composer')).fill(request.prompt);
       await (await required(page, 'send')).click();
       await monitor(page, emit, waitForIntervention);
@@ -102,11 +103,12 @@ async function terminalSignal(page: GeminiUiPage): Promise<GeminiSignal | undefi
 }
 
 async function required(page: GeminiUiPage, name: GeminiElementName): Promise<GeminiUiElement> {
-  const element = page.element(name);
-  if (!(await element.visible())) {
-    throw new Error(`Gemini UI changed: required ${name} selector is not visible.`);
+  for (let attempt = 0; attempt < 30; attempt += 1) {
+    const element = page.element(name);
+    if (await element.visible()) return element;
+    await page.wait();
   }
-  return element;
+  throw new Error(`Gemini UI changed: required ${name} selector is not usable.`);
 }
 
 async function diagnose(page: GeminiUiPage): Promise<{ state: string; message: string }> {

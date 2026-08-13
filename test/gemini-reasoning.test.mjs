@@ -26,6 +26,19 @@ test('extended reasoning toggles after model selection and verifies the active b
   );
 });
 
+test('waits for the reasoning option after opening the model menu', async () => {
+  const session = fixture({ reasoningVisibleAfter: 2 });
+  const signals = [];
+  await session.conversation.submit({ prompt: 'hello', reasoning: 'Extended thinking' }, (signal) =>
+    signals.push(signal),
+  );
+  assert.equal(
+    signals.some((signal) => signal.message?.includes('unavailable')),
+    false,
+  );
+  assert.ok(session.calls.filter((call) => call[0] === 'exact-model').length >= 3);
+});
+
 test('standard reasoning opens the model menu and disables active extended mode', async () => {
   const session = fixture({ reasoning: 'Extended thinking' });
   const signals = [];

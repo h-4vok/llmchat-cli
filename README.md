@@ -23,7 +23,7 @@ llmchat config clear-default-provider
 
 Use `llmchat --help` and `llmchat config --help` for command usage and supported values. A provider can be passed before or after the prompt; the canonical form is `llmchat chat "<prompt>" --provider <provider>`.
 
-Gemini reasoning can be selected with `--reasoning Standard` or `--reasoning "Extended thinking"`. The default is `Standard`; unknown provider-specific values produce a warning and do not stop the chat.
+Gemini reasoning values are `"Standard"` and `"Extended thinking"`; the default is `"Standard"`. Values are resolved per Gemini model; unknown provider-specific values produce a warning and do not stop the chat.
 
 ## Development
 

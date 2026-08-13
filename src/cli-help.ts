@@ -12,7 +12,7 @@ export function printRootHelp(output: Output): void {
 Supported providers: gemini
 
 System instructions: --gem, --gpt, and --system-instructions are equivalent aliases.
-Reasoning: Gemini supports Standard (default) and Extended thinking.
+Reasoning values for Gemini: "Standard", "Extended thinking". Default: "Standard".
 
 Examples:
   llmchat chat "hello" --provider gemini

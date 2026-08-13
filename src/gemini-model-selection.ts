@@ -1,5 +1,5 @@
 import type { GeminiSignal } from './gemini-flow.js';
-import { geminiReasoning, reasoningValues } from './config/reasoning.js';
+import { requestedReasoning, resolveGeminiReasoning } from './config/reasoning.js';
 import type { GeminiElementName, GeminiUiElement, GeminiUiPage } from './gemini-ui-conversation.js';
 
 type Emit = (signal: GeminiSignal) => void;
@@ -31,9 +31,10 @@ export async function selectModel(page: GeminiUiPage, model: string, emit: Emit)
 export async function selectReasoningMode(
   page: GeminiUiPage,
   requested: string | undefined,
+  model: string | undefined,
   emit: Emit,
 ): Promise<void> {
-  const reasoning = geminiReasoning(requested);
+  const reasoning = requestedReasoning(resolveGeminiReasoning(model), requested);
   if (!reasoning) return warnUnsupported(requested, emit);
   let selection: ModelSelection;
   try {
@@ -41,8 +42,13 @@ export async function selectReasoningMode(
   } catch {
     return warnReasoning(emit, 'model selector is unavailable');
   }
-  const desired = reasoning === 'extended';
-  const choice = selection.option(reasoningValues.extended);
+  const desired = reasoning.extended;
+  let choice: GeminiUiElement;
+  try {
+    choice = await waitForUsableText(page, selection.option, 'Extended thinking');
+  } catch {
+    return warnReasoning(emit, 'reasoning option is unavailable');
+  }
   await applyReasoningChoice(choice, selection.opener, desired, emit);
 }
 
@@ -84,6 +90,19 @@ async function waitForUsable(
     await page.wait();
   }
   throw new Error(`Gemini UI changed: ${name} selector did not become usable.`);
+}
+
+async function waitForUsableText(
+  page: GeminiUiPage,
+  option: (text: string) => GeminiUiElement,
+  text: string,
+): Promise<GeminiUiElement> {
+  for (let attempt = 0; attempt < 30; attempt += 1) {
+    const element = option(text);
+    if (await usable(element)) return element;
+    await page.wait();
+  }
+  throw new Error(`Gemini UI changed: ${text} option did not become usable.`);
 }
 
 async function usable(element: GeminiUiElement): Promise<boolean> {
