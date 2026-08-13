@@ -122,14 +122,16 @@ export function createLazyNotificationPort(
 }
 
 function toContext(paths: ReturnType<StorageProvisioner>): AdapterContext {
-  const activity = new Set<() => void>();
+  const activity = new Set<
+    (notification: { kind: 'progress' | 'warning'; message: string }) => void
+  >();
   return {
     profileDirectory: paths.profileDirectory,
     diagnosticsDirectory: paths.diagnosticsDirectory,
     screenshotsDirectory: paths.screenshotsDirectory,
     configuration: {},
-    notify() {
-      activity.forEach((listener) => listener());
+    notify(notification) {
+      activity.forEach((listener) => listener(notification));
     },
     onActivity(listener) {
       activity.add(listener);

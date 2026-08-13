@@ -1,6 +1,10 @@
 export function geminiUiFixture(options = {}) {
   const settings = {
     modelVisible: true,
+    activeModel: 'Flash',
+    modelEnabled: true,
+    fallbackVisible: true,
+    fallbackEnabled: true,
     modelOpenerVisible: true,
     choiceThrows: false,
     composeFirst: false,
@@ -35,18 +39,22 @@ function createElement(calls, sent, setSent) {
       calls.push(['click', name]);
       if (name === 'send') setSent(true);
     },
+    async enabled() {
+      return true;
+    },
     async fill(value) {
       calls.push(['fill', name, value]);
     },
     async innerText() {
       calls.push(['innerText', name]);
-      return text;
+      return typeof text === 'function' ? text() : text;
     },
     sent,
   });
 }
 
 function createElements(settings, element, waits) {
+  let activeModel = settings.activeModel;
   const delayed = settings.composeFirst || settings.silentFirst;
   return {
     blocked: element('blocked', false),
@@ -57,7 +65,7 @@ function createElements(settings, element, waits) {
       () => elementSent(element) && Boolean(settings.errorText),
       settings.errorText,
     ),
-    model: element('model', settings.modelOpenerVisible),
+    model: element('model', settings.modelOpenerVisible, () => activeModel),
     login: element('login', false),
     response: element(
       'response',
@@ -66,6 +74,7 @@ function createElements(settings, element, waits) {
     ),
     send: element('send', settings.missing !== 'send'),
     stop: element('stop', () => elementSent(element) && settings.composeFirst && waits() === 0),
+    setActiveModel: (model) => (activeModel = model),
   };
 }
 
@@ -83,7 +92,14 @@ function createPage(settings, calls, elements, incrementWait) {
     },
     exactText(text) {
       calls.push(['exact-model', text]);
-      const choice = createChoice(calls, text, settings.modelVisible);
+      const isFallback = text === '3.5 Flash-Lite';
+      const choice = createChoice(
+        calls,
+        text,
+        isFallback ? settings.fallbackVisible : settings.modelVisible,
+        isFallback ? settings.fallbackEnabled : settings.modelEnabled,
+        () => elements.setActiveModel(text),
+      );
       if (settings.choiceThrows) choice.click = () => Promise.reject(new Error('menu changed'));
       return choice;
     },
@@ -102,13 +118,17 @@ function createPage(settings, calls, elements, incrementWait) {
   };
 }
 
-function createChoice(calls, text, visible) {
+function createChoice(calls, text, visible, enabled, select) {
   return {
     async visible() {
       return visible;
     },
     async click() {
       calls.push(['click', `choice:${text}`]);
+      select();
+    },
+    async enabled() {
+      return enabled;
     },
   };
 }

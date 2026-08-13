@@ -8,9 +8,17 @@ function locator(calls, name, rejectVisibility = false) {
       calls.push(['first', name]);
       return this;
     },
+    filter(options) {
+      calls.push(['filter', name, options]);
+      return this;
+    },
     async isVisible() {
       calls.push(['visible', name]);
       if (rejectVisibility) throw new Error('detached');
+      return true;
+    },
+    async isEnabled() {
+      calls.push(['enabled', name]);
       return true;
     },
     async click() {
@@ -35,10 +43,6 @@ test('Playwright page boundary centralizes selectors and viewport operations', a
     locator(selector) {
       calls.push(['locator', selector]);
       return locator(calls, selector);
-    },
-    getByText(text, options) {
-      calls.push(['text', text, options]);
-      return locator(calls, text);
     },
     async waitForTimeout(ms) {
       calls.push(['wait', ms]);
@@ -69,7 +73,7 @@ test('Playwright page boundary centralizes selectors and viewport operations', a
   assert.equal(boundary.currentUrl(), 'https://gemini.google.com/app');
   assert.deepEqual(await boundary.screenshot(), new Uint8Array([7]));
   await boundary.close();
-  assert.ok(calls.some((call) => call[0] === 'text' && call[2].exact === true));
+  assert.ok(calls.some((call) => call[0] === 'locator' && call[1] === 'gem-menu-item'));
   assert.ok(calls.some((call) => call[0] === 'screenshot' && call[1].fullPage === false));
   const selectors = calls.filter(([kind]) => kind === 'locator').map(([, selector]) => selector);
   assert.ok(

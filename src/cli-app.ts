@@ -99,14 +99,18 @@ async function runChat(args: string[], output: Output, runtime: ChatRuntime): Pr
     systemInstructions: parsed.systemInstructions,
   };
   await withRuntimeContext(runtime, provider, async (context) => {
+    const unsubscribe = context.onActivity?.((event) =>
+      output.emit({ speaker: 'llmchat', message: event.message }),
+    );
     const session = awaitSessionIfNeeded(runtime, provider, context);
-    if (session) await session;
-    const adapter = runtime.adapterFor(provider);
-    const response = await executeWithTimeout(adapter, request, context, runtime.timeout);
-    output.emit({
-      speaker: provider,
-      message: response.text,
-    });
+    try {
+      if (session) await session;
+      const adapter = runtime.adapterFor(provider);
+      const response = await executeWithTimeout(adapter, request, context, runtime.timeout);
+      output.emit({ speaker: provider, message: response.text });
+    } finally {
+      unsubscribe?.();
+    }
   });
 }
 

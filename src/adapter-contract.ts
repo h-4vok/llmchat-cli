@@ -22,7 +22,7 @@ export type AdapterContext = {
   screenshotsDirectory: string;
   configuration: Readonly<Record<string, unknown>>;
   notify(notification: AdapterNotification): void;
-  onActivity?(listener: () => void): () => void;
+  onActivity?(listener: (notification: AdapterNotification) => void): () => void;
 };
 
 export type ChatRequest = {
