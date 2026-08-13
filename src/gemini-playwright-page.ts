@@ -6,7 +6,8 @@ export function createGeminiPlaywrightPage(page: Page, context: BrowserContext):
   return {
     goto: async (url) => void (await page.goto(url)),
     element: (name) => playwrightElement(page.locator(geminiSelectors[name]).first()),
-    exactText: (text) => playwrightElement(page.getByText(text, { exact: true }).first()),
+    exactText: (text) =>
+      playwrightElement(page.locator('gem-menu-item').filter({ hasText: text }).first()),
     wait: () => page.waitForTimeout(500),
     closed: () => page.isClosed(),
     currentUrl: () => page.url(),
@@ -18,6 +19,7 @@ export function createGeminiPlaywrightPage(page: Page, context: BrowserContext):
 function playwrightElement(locator: Locator): GeminiUiElement {
   return {
     visible: () => locator.isVisible().catch(() => false),
+    enabled: () => locator.isEnabled().catch(() => false),
     click: () => locator.click(),
     fill: (value) => locator.fill(value),
     innerText: () => locator.innerText(),

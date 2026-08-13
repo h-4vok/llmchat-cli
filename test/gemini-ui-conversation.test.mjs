@@ -21,7 +21,11 @@ test('new chat selects exact visible model, sends text once, and returns innerTe
     signals.push(signal),
   );
 
-  assert.deepEqual(signals, [{ kind: 'response', text: 'plain **markdown**' }]);
+  assert.deepEqual(signals.at(-1), { kind: 'response', text: 'plain **markdown**' });
+  assert.deepEqual(signals.slice(0, 2), [
+    { kind: 'activity', message: 'Gemini model selection command: Gemini 2.5 Pro' },
+    { kind: 'activity', message: 'Gemini model selector text: Gemini 2.5 Pro' },
+  ]);
   assert.ok(
     session.calls.some((call) => call[0] === 'exact-model' && call[1] === 'Gemini 2.5 Pro'),
   );
@@ -94,8 +98,17 @@ test('missing requested model falls back to the active model without error', asy
   await session.conversation.submit({ prompt: 'hello', model: 'Unavailable' }, (signal) =>
     signals.push(signal),
   );
-  assert.equal(signals[0].kind, 'response');
+  assert.equal(signals.at(-1).kind, 'response');
   assert.ok(session.calls.some((call) => call[0] === 'click' && call[1] === 'send'));
+});
+
+test('disabled requested model selects 3.5 Flash-Lite before filling and sending', async () => {
+  const session = fixture({ modelEnabled: false });
+  await session.conversation.submit({ prompt: 'hello', model: '3.6 Flash' }, () => {});
+  const actions = session.calls.map((call) => (call[0] === 'click' ? call[1] : call[0]));
+  assert.ok(actions.indexOf('choice:3.5 Flash-Lite') < actions.indexOf('fill'));
+  assert.ok(actions.indexOf('fill') < actions.indexOf('send'));
+  assert.ok(session.calls.some((call) => call[1] === 'choice:3.5 Flash-Lite'));
 });
 
 test('visible Gemini errors propagate their innerText', async () => {

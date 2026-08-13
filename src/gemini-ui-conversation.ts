@@ -15,6 +15,7 @@ export type GeminiElementName =
 
 export interface GeminiUiElement {
   visible(): Promise<boolean>;
+  enabled(): Promise<boolean>;
   click(): Promise<void>;
   fill(value: string): Promise<void>;
   innerText(): Promise<string>;
@@ -32,6 +33,7 @@ export interface GeminiUiPage extends GeminiArtifactPage {
 export type { GeminiArtifactPort } from './gemini-failure-artifacts.js';
 
 const newConversationUrl = geminiConfig.appUrl;
+const geminiFallbackModel = '3.5 Flash-Lite';
 
 export function createGeminiUiConversation(
   page: GeminiUiPage,
@@ -43,7 +45,7 @@ export function createGeminiUiConversation(
     async submit(request, emit) {
       await page.goto(newConversationUrl);
       await waitForIntervention(emit);
-      await selectModel(page, request.model);
+      await selectModel(page, request.model, emit);
       await (await required(page, 'composer')).fill(request.prompt);
       await (await required(page, 'send')).click();
       await monitor(page, emit, waitForIntervention);
@@ -54,21 +56,39 @@ export function createGeminiUiConversation(
   };
 }
 
-async function selectModel(page: GeminiUiPage, model: string | undefined): Promise<void> {
+async function selectModel(
+  page: GeminiUiPage,
+  model: string | undefined,
+  emit: (signal: GeminiSignal) => void,
+): Promise<void> {
   if (!model) return;
   try {
-    await chooseModel(page, model);
+    const selected = await chooseModel(page, model, emit);
+    if (!selected) await chooseModel(page, geminiFallbackModel, emit);
   } catch {
     return;
   }
 }
 
-async function chooseModel(page: GeminiUiPage, model: string): Promise<void> {
+async function chooseModel(
+  page: GeminiUiPage,
+  model: string,
+  emit: (signal: GeminiSignal) => void,
+): Promise<boolean> {
   const opener = page.element('model');
-  if (!(await opener.visible())) return;
+  if (!(await usable(opener))) return false;
+  emit({ kind: 'activity', message: `Gemini model selection command: ${model}` });
   await opener.click();
   const choice = page.exactText(model);
-  if (await choice.visible()) await choice.click();
+  if (!(await usable(choice))) return false;
+  await choice.click();
+  emit({ kind: 'activity', message: `Gemini model selector text: ${await opener.innerText()}` });
+  return true;
+}
+
+async function usable(element: GeminiUiElement): Promise<boolean> {
+  const visible = await element.visible();
+  return visible && (await element.enabled());
 }
 
 async function monitor(
