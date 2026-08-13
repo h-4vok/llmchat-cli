@@ -2,6 +2,10 @@ export function geminiUiFixture(options = {}) {
   const settings = {
     modelVisible: true,
     activeModel: 'Flash',
+    reasoning: 'Standard',
+    reasoningVisible: true,
+    reasoningStuck: false,
+    buttonExtended: undefined,
     modelEnabled: true,
     fallbackVisible: true,
     fallbackEnabled: true,
@@ -49,12 +53,16 @@ function createElement(calls, sent, setSent) {
       calls.push(['innerText', name]);
       return typeof text === 'function' ? text() : text;
     },
+    async active() {
+      return false;
+    },
     sent,
   });
 }
 
 function createElements(settings, element, waits) {
   let activeModel = settings.activeModel;
+  let reasoning = settings.reasoning;
   const delayed = settings.composeFirst || settings.silentFirst;
   return {
     blocked: element('blocked', false),
@@ -65,7 +73,12 @@ function createElements(settings, element, waits) {
       () => elementSent(element) && Boolean(settings.errorText),
       settings.errorText,
     ),
-    model: element('model', settings.modelOpenerVisible, () => activeModel),
+    model: element(
+      'model',
+      settings.modelOpenerVisible,
+      () =>
+        `${activeModel}${(settings.buttonExtended ?? (!settings.reasoningStuck && reasoning === 'Extended thinking')) ? ' Extended' : ''}`,
+    ),
     login: element('login', false),
     response: element(
       'response',
@@ -75,6 +88,11 @@ function createElements(settings, element, waits) {
     send: element('send', settings.missing !== 'send'),
     stop: element('stop', () => elementSent(element) && settings.composeFirst && waits() === 0),
     setActiveModel: (model) => (activeModel = model),
+    setReasoning: () => {
+      if (!settings.reasoningStuck)
+        reasoning = reasoning === 'Extended thinking' ? 'Standard' : 'Extended thinking';
+    },
+    reasoningActive: () => reasoning === 'Extended thinking',
   };
 }
 
@@ -96,10 +114,12 @@ function createPage(settings, calls, elements, incrementWait) {
       const choice = createChoice(
         calls,
         text,
-        isFallback ? settings.fallbackVisible : settings.modelVisible,
-        isFallback ? settings.fallbackEnabled : settings.modelEnabled,
-        () => elements.setActiveModel(text),
+        choiceVisible(settings, text, isFallback),
+        choiceEnabled(settings, isFallback),
+        () =>
+          text === 'Extended thinking' ? elements.setReasoning() : elements.setActiveModel(text),
       );
+      choice.active = async () => text === 'Extended thinking' && elements.reasoningActive();
       if (settings.choiceThrows) choice.click = () => Promise.reject(new Error('menu changed'));
       return choice;
     },
@@ -118,28 +138,13 @@ function createPage(settings, calls, elements, incrementWait) {
   };
 }
 
-function createChoice(calls, text, visible, enabled, select) {
-  return {
-    async visible() {
-      return visible;
-    },
-    async click() {
-      calls.push(['click', `choice:${text}`]);
-      select();
-    },
-    async enabled() {
-      return enabled;
-    },
-  };
+function choiceVisible(settings, text, isFallback) {
+  if (text === 'Extended thinking') return settings.reasoningVisible;
+  return isFallback ? settings.fallbackVisible : settings.modelVisible;
 }
 
-function createArtifactPort(artifacts) {
-  return {
-    async saveDiagnostic(content) {
-      artifacts.push(['diagnostic', content]);
-    },
-    async saveScreenshot(content) {
-      artifacts.push(['screenshot', [...content]]);
-    },
-  };
+function choiceEnabled(settings, isFallback) {
+  return isFallback ? settings.fallbackEnabled : settings.modelEnabled;
 }
+
+import { createArtifactPort, createChoice } from './gemini-ui-helpers.mjs';

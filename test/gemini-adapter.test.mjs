@@ -54,6 +54,15 @@ test('Gemini adapter opens one conversation, submits once, and closes after succ
   ]);
 });
 
+test('Gemini adapter forwards reasoning to the conversation', async () => {
+  const { adapter, calls } = fixture({ kind: 'response', text: 'plain text' });
+  await adapter.executeChat({ prompt: 'hello', reasoning: 'Extended thinking' }, context);
+  assert.deepEqual(calls[1], [
+    'submit',
+    { prompt: 'hello', model: undefined, reasoning: 'Extended thinking' },
+  ]);
+});
+
 test('diagnosis tracks activity, completion, and non-Error failures safely', async () => {
   const active = fixture([
     { kind: 'activity', message: 'token=secret' },

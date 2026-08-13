@@ -1,6 +1,7 @@
 export type GeminiPromptRequest = {
   prompt: string;
   model?: string;
+  reasoning?: string;
 };
 
 export type GeminiPromptResponse = {

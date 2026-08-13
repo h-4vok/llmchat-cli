@@ -31,6 +31,14 @@ function locator(calls, name, rejectVisibility = false) {
       calls.push(['innerText', name]);
       return 'plain text';
     },
+    async evaluate(callback) {
+      calls.push(['evaluate', name]);
+      if (name === 'selected')
+        return callback({ classList: { contains: () => true }, querySelector: () => null });
+      if (name === 'selected-query')
+        return callback({ classList: { contains: () => false }, querySelector: () => ({}) });
+      throw new Error('detached');
+    },
   };
 }
 
@@ -94,4 +102,22 @@ test('detached Playwright locators are treated as not visible', async () => {
   };
   const boundary = createGeminiPlaywrightPage(page, {});
   assert.equal(await boundary.element('error').visible(), false);
+});
+
+test('selected Playwright menu items expose active state', async () => {
+  const page = { locator: () => locator([], 'selected') };
+  const boundary = createGeminiPlaywrightPage(page, {});
+  assert.equal(await boundary.exactText('Extended thinking').active(), true);
+});
+
+test('nested selected Playwright menu icons expose active state', async () => {
+  const page = { locator: () => locator([], 'selected-query') };
+  const boundary = createGeminiPlaywrightPage(page, {});
+  assert.equal(await boundary.exactText('Extended thinking').active(), true);
+});
+
+test('detached Playwright active state is treated as inactive', async () => {
+  const page = { locator: () => locator([], 'rejected') };
+  const boundary = createGeminiPlaywrightPage(page, {});
+  assert.equal(await boundary.exactText('Extended thinking').active(), false);
 });

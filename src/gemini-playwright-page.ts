@@ -23,5 +23,12 @@ function playwrightElement(locator: Locator): GeminiUiElement {
     click: () => locator.click(),
     fill: (value) => locator.fill(value),
     innerText: () => locator.innerText(),
+    active: () =>
+      locator
+        .evaluate(
+          (element) =>
+            element.classList.contains('selected') || Boolean(element.querySelector('.selected')),
+        )
+        .catch(() => false),
   };
 }

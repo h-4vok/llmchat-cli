@@ -28,6 +28,7 @@ export type AdapterContext = {
 export type ChatRequest = {
   prompt: string;
   model?: string;
+  reasoning?: string;
   systemInstructions?: string;
 };
 
