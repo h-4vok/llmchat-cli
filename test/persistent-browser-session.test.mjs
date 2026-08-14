@@ -42,6 +42,12 @@ test('session probing uses the dedicated profile and closes its hidden browser',
   assert.equal(fake.closed(), 1);
 });
 
+test('session probing preserves an explicit visible request', async () => {
+  const fake = launcher('usable');
+  await createPersistentBrowserSessionPort(fake.port).checkSession({ ...request, visible: true });
+  assert.deepEqual(fake.calls[0], { ...request, visible: true });
+});
+
 test('non-usable probes report a missing session', async () => {
   const fake = launcher('login-required');
   const port = createPersistentBrowserSessionPort(fake.port);
@@ -88,4 +94,19 @@ test('unknown UI during visible login persists failure and preserves the browser
   assert.deepEqual(fake.failures, [
     'Gemini UI changed: unable to determine authenticated session state.',
   ]);
+});
+
+test('hidden login observation terminates on usable or cancelled states', async (t) => {
+  for (const observation of ['usable', 'cancelled']) {
+    await t.test(observation, async () => {
+      const fake = launcher(observation);
+      const login = await createPersistentBrowserSessionPort(fake.port).openLoginBrowser({
+        ...request,
+        visible: false,
+      });
+      const seen = [];
+      for await (const state of login.observeSession()) seen.push(state);
+      assert.deepEqual(seen, [observation]);
+    });
+  }
 });

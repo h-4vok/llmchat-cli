@@ -72,6 +72,7 @@ test('Playwright page boundary centralizes selectors and viewport operations', a
   await boundary.goto('https://gemini.google.com/app');
   const composer = boundary.element('composer');
   assert.equal(await composer.visible(), true);
+  assert.equal(await composer.enabled(), true);
   await composer.click();
   await composer.fill('hello');
   assert.equal(await composer.innerText(), 'plain text');
@@ -120,4 +121,18 @@ test('detached Playwright active state is treated as inactive', async () => {
   const page = { locator: () => locator([], 'rejected') };
   const boundary = createGeminiPlaywrightPage(page, {});
   assert.equal(await boundary.exactText('Extended thinking').active(), false);
+});
+
+test('page close waiting tolerates a close race', async () => {
+  let closed = false;
+  const page = {
+    isClosed: () => closed,
+    async waitForTimeout() {
+      closed = true;
+      throw new Error('closed');
+    },
+  };
+  const boundary = createGeminiPlaywrightPage(page, {});
+  await boundary.waitForClose();
+  assert.equal(closed, true);
 });

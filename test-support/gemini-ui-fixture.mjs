@@ -5,6 +5,7 @@ export function geminiUiFixture(options = {}) {
     reasoning: 'Standard',
     reasoningVisible: true,
     reasoningVisibleAfter: 0,
+    reasoningEnabled: true,
     reasoningStuck: false,
     buttonExtended: undefined,
     modelEnabled: true,
@@ -123,7 +124,7 @@ function createPage(settings, calls, elements, incrementWait, currentWaits) {
         calls,
         text,
         choiceVisible(settings, text, isFallback, currentWaits),
-        enabled(settings, isFallback),
+        text === 'Extended thinking' ? settings.reasoningEnabled : enabled(settings, isFallback),
         () =>
           text === 'Extended thinking' ? elements.setReasoning() : elements.setActiveModel(text),
       );

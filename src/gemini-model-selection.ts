@@ -58,9 +58,12 @@ async function applyReasoningChoice(
   desired: boolean,
   emit: Emit,
 ): Promise<void> {
-  if (!(await usable(choice))) return warnReasoning(emit, 'reasoning option is unavailable');
-  if ((await choice.active()) !== desired) await clickReasoning(choice, emit);
-  await verifyReasoning(opener, desired, emit);
+  if (await usable(choice)) {
+    if ((await choice.active()) !== desired) await clickReasoning(choice, emit);
+    await verifyReasoning(opener, desired, emit);
+    return;
+  }
+  warnReasoning(emit, 'reasoning option is unavailable');
 }
 
 async function clickReasoning(choice: GeminiUiElement, emit: Emit): Promise<void> {

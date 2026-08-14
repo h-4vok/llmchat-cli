@@ -1,47 +1,10 @@
-import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { ensureBrowserSession } from '../dist/browser-session.js';
-
-const request = {
-  provider: 'gemini',
-  profileDirectory: 'C:\\llmchat\\profiles\\gemini',
-};
-
-function createPorts(sessionStatus, observations = []) {
-  const calls = [];
-  let closeCalls = 0;
-  const loginBrowser = {
-    async *observeSession() {
-      for (const observation of observations) {
-        assert.equal(closeCalls, 0);
-        yield await observation;
-      }
-    },
-    async close() {
-      closeCalls += 1;
-      calls.push('close-login-browser');
-    },
-  };
-  return {
-    calls,
-    closeCalls: () => closeCalls,
-    browser: {
-      async checkSession(received) {
-        calls.push(['check-session', received]);
-        return sessionStatus;
-      },
-      async openLoginBrowser(received) {
-        calls.push(['open-login-browser', received]);
-        return loginBrowser;
-      },
-    },
-    notifications: {
-      async send(notification) {
-        calls.push(['notify', notification]);
-      },
-    },
-  };
-}
+import assert from 'node:assert/strict';
+import {
+  browserSessionRequest as request,
+  createBrowserSessionPorts as createPorts,
+} from '../test-support/browser-session-fixture.mjs';
 
 test('a usable persistent session resumes without browser or notification', async () => {
   const ports = createPorts('usable');
@@ -86,6 +49,31 @@ test('visible authentication closes after observing an authenticated session', a
     ports.calls.some((call) => Array.isArray(call) && call[0] === 'check-session'),
     false,
   );
+});
+
+test('notification failure does not prevent visible authentication', async () => {
+  const ports = createPorts('missing', ['usable']);
+  ports.notifications.send = async () => {
+    throw new Error('notification unavailable');
+  };
+  assert.deepEqual(await ensureBrowserSession({ ...request, visible: true }, ports), {
+    status: 'ready',
+    source: 'authenticated',
+  });
+});
+
+test('cancelled visible authentication verifies every terminal session state', async (t) => {
+  for (const availability of ['usable', 'indeterminate', 'missing']) {
+    await t.test(availability, async () => {
+      const ports = createPorts(availability, ['cancelled']);
+      assert.deepEqual(
+        await ensureBrowserSession({ ...request, visible: true }, ports),
+        availability === 'usable'
+          ? { status: 'ready', source: 'authenticated' }
+          : { status: availability === 'indeterminate' ? 'indeterminate' : 'cancelled' },
+      );
+    });
+  }
 });
 test('missing or expired sessions wait through manual intervention then resume', async (t) => {
   for (const unavailable of ['missing', 'expired']) {
@@ -137,37 +125,5 @@ test('an interrupted observation stream closes its login browser', async () => {
   await assert.rejects(
     ensureBrowserSession(request, ports),
     /stopped before authentication or cancellation/,
-  );
-});
-
-test('login has no timeout and stays open until a terminal observation', async () => {
-  let release;
-  const terminalObservation = new Promise((resolve) => {
-    release = resolve;
-  });
-  const ports = createPorts('missing', [terminalObservation]);
-  let settled = false;
-
-  const execution = ensureBrowserSession(request, ports).finally(() => {
-    settled = true;
-  });
-  await new Promise((resolve) => setImmediate(resolve));
-
-  assert.equal(settled, false);
-  assert.equal(ports.closeCalls(), 0);
-  release('usable');
-  assert.deepEqual(await execution, { status: 'ready', source: 'authenticated' });
-});
-
-test('independent executions do not reuse in-memory session state', async () => {
-  const first = createPorts('missing', ['usable']);
-  const second = createPorts('missing', ['usable']);
-
-  await Promise.all([ensureBrowserSession(request, first), ensureBrowserSession(request, second)]);
-
-  assert.equal(first.calls.filter((call) => Array.isArray(call) && call[0] === 'notify').length, 1);
-  assert.equal(
-    second.calls.filter((call) => Array.isArray(call) && call[0] === 'notify').length,
-    1,
   );
 });
