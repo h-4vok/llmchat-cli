@@ -75,6 +75,15 @@ test('missing reasoning option warns and continues to send', async () => {
   assert.equal(signals.at(-1).kind, 'response');
 });
 
+test('disabled reasoning option warns and continues to send', async () => {
+  const session = fixture({ reasoningEnabled: false });
+  const signals = [];
+  await session.conversation.submit({ prompt: 'hello', reasoning: 'Extended thinking' }, (signal) =>
+    signals.push(signal),
+  );
+  assert.match(signals[0].message, /reasoning option is unavailable/);
+});
+
 test('toggle click failure warns and continues to send', async () => {
   const session = fixture({ choiceThrows: true });
   const signals = [];

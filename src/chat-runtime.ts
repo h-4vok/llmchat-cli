@@ -8,6 +8,7 @@ import type { BrowserSessionResult } from './browser-session.js';
 import { sendChat } from './provider.js';
 import { ensureProviderStorage } from './secure-storage.js';
 import { runtimeConfig } from './config/runtime.js';
+import { DisposableConversationUnsupportedError } from './adapter-contract.js';
 
 export type ChatRuntime = {
   adapterFor(provider: string): ProviderAdapter;
@@ -26,6 +27,8 @@ export type StorageProvisioner = (provider: string) => ProviderStoragePaths;
 const simulationAdapter: ProviderAdapter = {
   provider: 'gemini',
   async executeChat(request) {
+    if (request.disposableConversation)
+      throw new DisposableConversationUnsupportedError(this.provider);
     return { text: sendChat(this.provider, request) };
   },
   async diagnose() {

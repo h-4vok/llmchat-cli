@@ -5,6 +5,7 @@ import type { GeminiBrowserPort } from './gemini-adapter.js';
 import { createGeminiPlaywrightPage } from './gemini-playwright-page.js';
 import { persistGeminiFailure } from './gemini-failure-artifacts.js';
 import { createGeminiUiConversation, type GeminiUiPage } from './gemini-ui-conversation.js';
+import { geminiArtifactPort } from './gemini-artifact-port.js';
 import { saveDiagnostic, saveScreenshot } from './secure-storage.js';
 import type { NativeNotificationPort } from './native-notification.js';
 import { geminiConfig } from './config/gemini.js';
@@ -25,23 +26,20 @@ export function createPlaywrightGeminiBrowser(
   return {
     async open(context) {
       const page = await openPage(context, options);
-      return createGeminiUiConversation(page, artifactPort(options), notifications);
+      return createGeminiUiConversation(page, geminiArtifactPort(options), notifications);
     },
     async health(context) {
       const page = await openPage(context, options);
       try {
         await page.goto(geminiConfig.appUrl);
         const health = await inspectHealth(page);
-        if (health.status === 'broken') {
-          await persistHealthFailure(page, options, health.message);
-          return health;
-        }
+        if (health.status === 'broken') await persistHealthFailure(page, options, health.message);
+        await tryClose(page);
         return health;
       } catch (failure) {
         await tryPersistHealthFailure(page, options, errorMessage(failure));
-        throw failure;
-      } finally {
         await tryClose(page);
+        throw failure;
       }
     },
   };
@@ -72,7 +70,7 @@ async function persistHealthFailure(
   options: GeminiPlaywrightOptions,
   message: string,
 ): Promise<void> {
-  await persistGeminiFailure(page, artifactPort(options), new Error(message));
+  await persistGeminiFailure(page, geminiArtifactPort(options), new Error(message));
 }
 
 function errorMessage(failure: unknown): string {
@@ -136,17 +134,6 @@ async function waitForVisible(
 
 function healthElementTimeout(): number {
   return runtimeConfig.timeouts.healthElementMs;
-}
-
-function artifactPort(options: GeminiPlaywrightOptions) {
-  return {
-    async saveDiagnostic(content: string) {
-      options.saveDiagnostic('gemini', content);
-    },
-    async saveScreenshot(content: Uint8Array) {
-      options.saveScreenshot('gemini', content);
-    },
-  };
 }
 
 function runtimeOptions(): GeminiPlaywrightOptions {

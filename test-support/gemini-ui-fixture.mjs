@@ -5,6 +5,7 @@ export function geminiUiFixture(options = {}) {
     reasoning: 'Standard',
     reasoningVisible: true,
     reasoningVisibleAfter: 0,
+    reasoningEnabled: true,
     reasoningStuck: false,
     buttonExtended: undefined,
     modelEnabled: true,
@@ -40,7 +41,6 @@ export function geminiUiFixture(options = {}) {
     artifactPort: createArtifactPort(artifacts),
   };
 }
-
 function createElement(calls, sent, setSent) {
   return (name, visible, text = '') => ({
     async visible() {
@@ -61,6 +61,7 @@ function createElement(calls, sent, setSent) {
       return typeof text === 'function' ? text() : text;
     },
     async active() {
+      calls.push(['active', name]);
       return false;
     },
     sent,
@@ -72,6 +73,7 @@ function createElements(settings, element, waits) {
   let reasoning = settings.reasoning;
   const delayed = settings.composeFirst || settings.silentFirst;
   return {
+    temporaryChat: temporaryChatElement(settings, element),
     blocked: element('blocked', false),
     captcha: element('captcha', false),
     composer: element('composer', settings.missing !== 'composer'),
@@ -122,7 +124,7 @@ function createPage(settings, calls, elements, incrementWait, currentWaits) {
         calls,
         text,
         choiceVisible(settings, text, isFallback, currentWaits),
-        choiceEnabled(settings, isFallback),
+        text === 'Extended thinking' ? settings.reasoningEnabled : enabled(settings, isFallback),
         () =>
           text === 'Extended thinking' ? elements.setReasoning() : elements.setActiveModel(text),
       );
@@ -133,8 +135,8 @@ function createPage(settings, calls, elements, incrementWait, currentWaits) {
     async wait() {
       incrementWait();
     },
-    closed: () => false,
     currentUrl: () => settings.url,
+    closed: () => false,
     async screenshot() {
       calls.push(['screenshot']);
       return new Uint8Array([1, 2]);
@@ -144,13 +146,8 @@ function createPage(settings, calls, elements, incrementWait, currentWaits) {
     },
   };
 }
-
-function choiceVisible(settings, text, isFallback, waits) {
-  if (text === 'Extended thinking')
-    return settings.reasoningVisible && settings.reasoningVisibleAfter <= waits();
-  return isFallback ? settings.fallbackVisible : settings.modelVisible;
-}
-const choiceEnabled = (settings, isFallback) =>
+const enabled = (settings, isFallback) =>
   isFallback ? settings.fallbackEnabled : settings.modelEnabled;
-
 import { createArtifactPort, createChoice } from './gemini-ui-helpers.mjs';
+import { choiceVisible } from './gemini-fixture-visibility.mjs';
+import { temporaryChatElement } from './gemini-fixture-temporary-chat.mjs';

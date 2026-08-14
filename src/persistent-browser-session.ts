@@ -38,9 +38,9 @@ export function createPersistentBrowserSessionPort(
 
 async function probeSession(
   launcher: PersistentBrowserLauncher,
-  request: BrowserSessionRequest,
+  request: PersistentBrowserRequest,
 ): Promise<SessionAvailability> {
-  const browser = await launcher.open({ ...request, visible: request.visible ?? false });
+  const browser = await launcher.open(request);
   let preserve = false;
   try {
     const result = await probeObservation(browser);

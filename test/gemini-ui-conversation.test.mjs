@@ -36,6 +36,30 @@ test('new chat selects exact visible model, sends text once, and returns innerTe
   assert.ok(session.calls.some((call) => call[0] === 'innerText' && call[1] === 'response'));
 });
 
+test('disposable chat enables Temporary chat before every other chat action', async () => {
+  const session = fixture();
+  await session.conversation.submit(
+    {
+      prompt: 'hello',
+      model: 'Gemini 2.5 Pro',
+      reasoning: 'Extended thinking',
+      disposableConversation: true,
+    },
+    () => {},
+  );
+  const actions = session.calls.map((call) => (call[0] === 'click' ? call[1] : call[0]));
+  assert.equal(actions.indexOf('temporary-chat'), 1);
+  assert.ok(actions.indexOf('temporary-chat') < actions.indexOf('choice:Gemini 2.5 Pro'));
+  assert.ok(actions.indexOf('temporary-chat') < actions.indexOf('fill'));
+  assert.ok(actions.indexOf('temporary-chat') < actions.indexOf('send'));
+  assert.ok(actions.indexOf('temporary-chat') < actions.lastIndexOf('innerText'));
+  assert.ok(actions.indexOf('temporary-chat') < actions.indexOf('choice:Extended thinking'));
+  assert.equal(
+    session.calls.some((call) => call[0] === 'active' && call[1] === 'temporary-chat'),
+    false,
+  );
+});
+
 test('model fallback covers omitted, hidden, and changed model controls', async () => {
   for (const options of [
     { request: { prompt: 'hello' } },

@@ -95,7 +95,7 @@ async function runChat(args: string[], output: Output, runtime: ChatRuntime): Pr
   const provider = selectedProvider(parsed.provider);
   const request = chatRequest(parsed);
   await withRuntimeContext(runtime, provider, async (context) => {
-    await executeChat(runtime, provider, context, request, parsed.keepBrowserOpen ?? false, output);
+    await executeChat(runtime, provider, context, request, Boolean(parsed.keepBrowserOpen), output);
   });
 }
 function chatRequest(parsed: ReturnType<typeof parseChat>) {
@@ -105,6 +105,7 @@ function chatRequest(parsed: ReturnType<typeof parseChat>) {
     systemInstructions: parsed.systemInstructions,
     ...(parsed.reasoning === undefined ? {} : { reasoning: parsed.reasoning }),
     keepBrowserOpen: parsed.keepBrowserOpen,
+    disposableConversation: parsed.disposableConversation,
   };
 }
 

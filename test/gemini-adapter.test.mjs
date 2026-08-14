@@ -63,6 +63,12 @@ test('Gemini adapter forwards reasoning to the conversation', async () => {
   ]);
 });
 
+test('Gemini adapter forwards disposable conversation requirement', async () => {
+  const { adapter, calls } = fixture({ kind: 'response', text: 'plain text' });
+  await adapter.executeChat({ prompt: 'hello', disposableConversation: true }, context);
+  assert.equal(calls[1][1].disposableConversation, true);
+});
+
 test('diagnosis tracks activity, completion, and non-Error failures safely', async () => {
   const active = fixture([
     { kind: 'activity', message: 'token=secret' },

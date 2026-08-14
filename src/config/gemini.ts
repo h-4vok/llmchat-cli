@@ -18,5 +18,6 @@ export const geminiConfig = Object.freeze({
     response: 'model-response .response-content, model-response',
     send: 'button[aria-label*="send" i], button[data-test-id*="send"]',
     stop: 'button[aria-label*="stop" i], button[data-test-id*="stop"]',
+    temporaryChat: '[data-test-id="temp-chat-button"]',
   },
 } as const);

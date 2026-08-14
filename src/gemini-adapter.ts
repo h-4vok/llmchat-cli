@@ -68,8 +68,13 @@ async function runConversation(
   context: AdapterContext,
   inactivityMs: number,
 ): Promise<ChatResponse> {
-  const prompt: GeminiPromptRequest = { prompt: request.prompt, model: request.model };
+  const prompt: GeminiPromptRequest = {
+    prompt: request.prompt,
+    model: request.model,
+  };
   if (request.reasoning !== undefined) prompt.reasoning = request.reasoning;
+  if (request.disposableConversation !== undefined)
+    prompt.disposableConversation = request.disposableConversation;
   return executeGeminiPrompt(conversation, prompt, {
     inactivityMs,
     onActivity: ({ message }) =>
