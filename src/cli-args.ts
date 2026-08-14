@@ -5,6 +5,7 @@ export type ChatArguments = {
   prompt?: string;
   provider?: string;
   systemInstructions?: string;
+  keepBrowserOpen?: boolean;
 };
 
 type ParseState = {
@@ -13,6 +14,7 @@ type ParseState = {
   reasoning?: string;
   provider?: string;
   systemInstructions?: string;
+  keepBrowserOpen?: boolean;
   flag?: string;
 };
 type OptionHandler = (option: string, args: string[], state: ParseState) => ChatArguments;
@@ -20,6 +22,7 @@ type OptionHandler = (option: string, args: string[], state: ParseState) => Chat
 const optionHandlers: Record<string, OptionHandler> = {
   '--gem': parseSystemInstructions,
   '--gpt': parseSystemInstructions,
+  '--keep-browser-open': parseKeepBrowserOpen,
   '--model': parseModel,
   '--provider': parseProvider,
   '--reasoning': parseReasoning,
@@ -36,6 +39,11 @@ function parseReasoning(_option: string, args: string[], state: ParseState): Cha
   const { value, remaining } = optionValue(args, '--reasoning');
   state.reasoning = value;
   return parseRemaining(remaining, state);
+}
+
+function parseKeepBrowserOpen(_option: string, args: string[], state: ParseState): ChatArguments {
+  state.keepBrowserOpen = true;
+  return parseRemaining(args, state);
 }
 
 export function parseChat(args: string[]): ChatArguments {
@@ -97,6 +105,7 @@ function parsedArguments(state: ParseState): ChatArguments {
     prompt: state.promptParts.join(' ').trim() || undefined,
     provider: state.provider,
     systemInstructions: state.systemInstructions,
+    keepBrowserOpen: state.keepBrowserOpen ?? false,
   } as ChatArguments;
   if (state.reasoning !== undefined) parsed.reasoning = state.reasoning;
   return parsed;

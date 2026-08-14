@@ -65,7 +65,15 @@ test('chat establishes Gemini session before adapter lookup and forwards model t
     ['context', 'gemini'],
     ['session', 'gemini', context],
     ['adapter', 'gemini'],
-    ['execute', { prompt: 'hello', model: 'Gemini 2.5 Pro', systemInstructions: undefined }],
+    [
+      'execute',
+      {
+        prompt: 'hello',
+        model: 'Gemini 2.5 Pro',
+        systemInstructions: undefined,
+        keepBrowserOpen: false,
+      },
+    ],
   ]);
   assert.deepEqual(events, [{ speaker: 'gemini', message: 'answer' }]);
 });

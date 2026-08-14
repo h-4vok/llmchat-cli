@@ -33,6 +33,7 @@ export interface GeminiUiPage extends GeminiArtifactPage {
   wait(): Promise<void>;
   closed(): boolean;
   close(): Promise<void>;
+  waitForClose(): Promise<void>;
 }
 
 export type { GeminiArtifactPort } from './gemini-failure-artifacts.js';
@@ -60,6 +61,7 @@ export function createGeminiUiConversation(
     diagnoseLocally: () => diagnose(page),
     persistFailure: (error) => persistGeminiFailure(page, artifacts, error),
     close: () => page.close(),
+    waitForClose: () => page.waitForClose(),
   };
 }
 

@@ -4,7 +4,7 @@ export function printRootHelp(output: Output): void {
   output.emit({
     speaker: 'llmchat',
     message: `Usage:
-  llmchat chat "<prompt>" [--provider <provider>] [--model <visible name>] [--reasoning <value>] [--gem|--gpt|--system-instructions <name>]
+  llmchat chat "<prompt>" [--provider <provider>] [--model <visible name>] [--reasoning <value>] [--keep-browser-open] [--gem|--gpt|--system-instructions <name>]
   llmchat auth <provider>
   llmchat health <provider>
   llmchat config <set-default-provider|clear-default-provider> [provider]

@@ -30,10 +30,12 @@ export type ChatRequest = {
   model?: string;
   reasoning?: string;
   systemInstructions?: string;
+  keepBrowserOpen?: boolean;
 };
 
 export type ChatResponse = {
   text: string;
+  waitForClose?: () => Promise<void>;
 };
 
 export interface ProviderAdapter<
