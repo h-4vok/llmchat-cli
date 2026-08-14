@@ -13,7 +13,19 @@ export function createGeminiPlaywrightPage(page: Page, context: BrowserContext):
     currentUrl: () => page.url(),
     screenshot: async () => page.screenshot({ fullPage: false, type: 'png' }),
     close: () => context.close(),
+    waitForClose: () => waitForPageClose(page),
   };
+}
+
+async function waitForPageClose(page: Page): Promise<void> {
+  while (!page.isClosed()) {
+    try {
+      await page.waitForTimeout(500);
+    } catch (error) {
+      if (page.isClosed()) return;
+      throw error;
+    }
+  }
 }
 
 function playwrightElement(locator: Locator): GeminiUiElement {

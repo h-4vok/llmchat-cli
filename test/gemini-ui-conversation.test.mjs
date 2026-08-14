@@ -84,11 +84,13 @@ test('local diagnosis reports visible errors or stalled UI and closes explicitly
     message: 'token=[REDACTED]',
   });
   const stalled = fixture();
+  stalled.page.waitForClose = async () => stalled.calls.push(['wait-for-close']);
   assert.deepEqual(await stalled.conversation.diagnoseLocally(), {
     state: 'stalled',
     message: 'Gemini stopped producing observable UI activity.',
   });
   await stalled.conversation.close();
+  await stalled.conversation.waitForClose();
   assert.ok(stalled.calls.some((call) => call[0] === 'close-page'));
 });
 

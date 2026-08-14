@@ -16,6 +16,7 @@ import { redactDiagnosticText } from './secret-redaction.js';
 export interface GeminiConversation extends GeminiPromptPort {
   persistFailure(error: Error): Promise<void>;
   close(): Promise<void>;
+  waitForClose(): Promise<void>;
 }
 
 export interface GeminiBrowserPort {
@@ -41,9 +42,12 @@ export function createGeminiAdapter(options: GeminiAdapterOptions): ProviderAdap
           context,
           options.inactivityMs,
         );
-        await conversation.close();
+        if (!request.keepBrowserOpen) await conversation.close();
         diagnostic = { state: 'progress', message: 'Gemini response completed.' };
-        return { text: response.text };
+        return {
+          text: response.text,
+          ...(request.keepBrowserOpen ? { waitForClose: () => conversation.waitForClose() } : {}),
+        };
       } catch (failure) {
         const error = asError(failure);
         diagnostic = { state: 'error', message: redactDiagnosticText(error.message) };

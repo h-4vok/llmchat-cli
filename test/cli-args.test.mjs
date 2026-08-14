@@ -9,6 +9,7 @@ test('parseChat collects prompt words and provider options', () => {
     prompt: 'hello world',
     provider: 'gemini',
     systemInstructions: undefined,
+    keepBrowserOpen: false,
   });
 });
 
@@ -40,6 +41,10 @@ test('parseChat accepts every system-instructions alias', () => {
 test('parseChat recognizes help without parsing the remaining arguments', () => {
   assert.deepEqual(parseChat(['--help', '--unknown']), { help: true });
   assert.deepEqual(parseChat(['-h']), { help: true });
+});
+
+test('parseChat recognizes keep-browser-open without consuming a value', () => {
+  assert.equal(parseChat(['--keep-browser-open', 'hello']).keepBrowserOpen, true);
 });
 
 test('parseChat rejects missing option values', () => {

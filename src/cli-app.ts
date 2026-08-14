@@ -1,5 +1,5 @@
-import { executeWithTimeout } from './adapter-contract.js';
 import { defaultChatRuntime, type ChatRuntime } from './chat-runtime.js';
+import { executeChat } from './chat-command.js';
 import { parseChat } from './cli-args.js';
 import { printConfigHelp, printRootHelp } from './cli-help.js';
 import { removeDefaultProvider, saveDefaultProvider } from './config.js';
@@ -93,26 +93,19 @@ async function runChat(args: string[], output: Output, runtime: ChatRuntime): Pr
   if (parsed.help) return printRootHelp(output);
   if (!parsed.prompt) throw new Error('A prompt is required.');
   const provider = selectedProvider(parsed.provider);
-  const request = {
+  const request = chatRequest(parsed);
+  await withRuntimeContext(runtime, provider, async (context) => {
+    await executeChat(runtime, provider, context, request, parsed.keepBrowserOpen ?? false, output);
+  });
+}
+function chatRequest(parsed: ReturnType<typeof parseChat>) {
+  return {
     model: parsed.model,
-    prompt: parsed.prompt,
+    prompt: parsed.prompt as string,
     systemInstructions: parsed.systemInstructions,
     ...(parsed.reasoning === undefined ? {} : { reasoning: parsed.reasoning }),
+    keepBrowserOpen: parsed.keepBrowserOpen,
   };
-  await withRuntimeContext(runtime, provider, async (context) => {
-    const unsubscribe = context.onActivity?.((event) =>
-      output.emit({ speaker: 'llmchat', message: event.message }),
-    );
-    const session = awaitSessionIfNeeded(runtime, provider, context);
-    try {
-      if (session) await session;
-      const adapter = runtime.adapterFor(provider);
-      const response = await executeWithTimeout(adapter, request, context, runtime.timeout);
-      output.emit({ speaker: provider, message: response.text });
-    } finally {
-      unsubscribe?.();
-    }
-  });
 }
 
 async function runAuth(args: string[], output: Output, runtime: ChatRuntime): Promise<void> {
@@ -140,14 +133,6 @@ async function runHealth(args: string[], output: Output, runtime: ChatRuntime): 
     if (health.status === 'broken') throw new Error(health.message);
     output.emit({ speaker: 'llmchat', message: health.message });
   });
-}
-
-function awaitSessionIfNeeded(
-  runtime: ChatRuntime,
-  provider: string,
-  context: ReturnType<ChatRuntime['contextFor']>,
-): Promise<void> | undefined {
-  return requireSession(runtime, provider, context)?.then(() => undefined);
 }
 
 function requireSession(
