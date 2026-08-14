@@ -105,6 +105,7 @@ function chatRequest(parsed: ReturnType<typeof parseChat>) {
     systemInstructions: parsed.systemInstructions,
     ...(parsed.reasoning === undefined ? {} : { reasoning: parsed.reasoning }),
     keepBrowserOpen: parsed.keepBrowserOpen,
+    disposableConversation: parsed.disposableConversation,
   };
 }
 

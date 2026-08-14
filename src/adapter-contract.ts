@@ -31,7 +31,15 @@ export type ChatRequest = {
   reasoning?: string;
   systemInstructions?: string;
   keepBrowserOpen?: boolean;
+  disposableConversation?: boolean;
 };
+
+export class DisposableConversationUnsupportedError extends Error {
+  constructor(provider: string) {
+    super(`Provider ${provider} does not support disposable conversations.`);
+    this.name = 'DisposableConversationUnsupportedError';
+  }
+}
 
 export type ChatResponse = {
   text: string;

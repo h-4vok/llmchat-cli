@@ -72,6 +72,7 @@ test('chat establishes Gemini session before adapter lookup and forwards model t
         model: 'Gemini 2.5 Pro',
         systemInstructions: undefined,
         keepBrowserOpen: false,
+        disposableConversation: false,
       },
     ],
   ]);

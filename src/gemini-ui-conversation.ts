@@ -15,7 +15,16 @@ import {
 } from './gemini-model-selection.js';
 
 export type GeminiElementName =
-  'blocked' | 'captcha' | 'composer' | 'error' | 'login' | 'model' | 'response' | 'send' | 'stop';
+  | 'blocked'
+  | 'captcha'
+  | 'composer'
+  | 'error'
+  | 'login'
+  | 'model'
+  | 'response'
+  | 'send'
+  | 'stop'
+  | 'temporaryChat';
 
 export interface GeminiUiElement {
   visible(): Promise<boolean>;
@@ -51,6 +60,7 @@ export function createGeminiUiConversation(
     async submit(request, emit) {
       await page.goto(newConversationUrl);
       await waitForIntervention(emit);
+      if (request.disposableConversation) await enableTemporaryChat(page);
       await selectModel(page, request.model, emit);
       if (request.reasoning !== undefined)
         await selectReasoningMode(page, request.reasoning, request.model, emit);
@@ -63,6 +73,10 @@ export function createGeminiUiConversation(
     close: () => page.close(),
     waitForClose: () => page.waitForClose(),
   };
+}
+
+async function enableTemporaryChat(page: GeminiUiPage): Promise<void> {
+  await (await required(page, 'temporaryChat')).click();
 }
 
 async function selectModel(

@@ -10,6 +10,7 @@ test('parseChat collects prompt words and provider options', () => {
     provider: 'gemini',
     systemInstructions: undefined,
     keepBrowserOpen: false,
+    disposableConversation: false,
   });
 });
 
@@ -45,6 +46,10 @@ test('parseChat recognizes help without parsing the remaining arguments', () => 
 
 test('parseChat recognizes keep-browser-open without consuming a value', () => {
   assert.equal(parseChat(['--keep-browser-open', 'hello']).keepBrowserOpen, true);
+});
+
+test('parseChat recognizes disposable-conversation without consuming a value', () => {
+  assert.equal(parseChat(['--disposable-conversation', 'hello']).disposableConversation, true);
 });
 
 test('parseChat rejects missing option values', () => {
