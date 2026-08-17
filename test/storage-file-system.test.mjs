@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
@@ -54,6 +54,7 @@ test('secure append refuses a native symbolic link without modifying its target'
     );
     assert.equal(readFileSync(target, 'utf8'), 'original');
   } finally {
+    unlinkSync(link, { force: true });
     rmSync(root, { recursive: true, force: true });
   }
 });

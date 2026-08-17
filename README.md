@@ -1,14 +1,33 @@
 # llmchat-cli
 
-CLI for provider-backed chat through a dedicated persistent browser profile. Tests use deterministic injected boundaries and never access provider UI, credentials, or normal browser profiles. All visual output uses one `stdout` flow; success exits with `0` and every failure exits with `1`.
+> **Experimental personal alpha.** `llmchat-cli` is an unofficial personal project and is not affiliated with, sponsored by, or endorsed by Google or Gemini. It automates a dedicated browser profile against a changing web UI. It may stop working, be blocked, or trigger provider verification without notice.
 
-## MVP
+This repository is source-only. There is no official `llmchat-cli` package published on npm, and commands below must be run from a local checkout. Do not assume that a similarly named npm package is published by this project.
 
-- Supported provider: `gemini`.
-- The selected default is stored in the user-local configuration directory (`$XDG_CONFIG_HOME/llmchat/config.json`, or the platform equivalent).
-- Gemini authentication is completed manually in a dedicated Brave or Chromium/Chrome profile; CAPTCHA and anti-bot checks are never automated.
-- If the initial Gemini probe is indeterminate, `auth gemini` opens the dedicated visible window, reports that login is needed, and sends one native notification. Complete login there; the browser remains open with redacted diagnostics and a provider-viewport capture if Gemini's UI cannot be identified. A `chat` request in this state is never submitted and exits `1`; close the retained browser yourself after manual resolution.
-- Colors are always active in the MVP. Every visual line has an aligned speaker label, `##`, a local `[HH:MM]` timestamp, and plain text.
+The project is provided under the MIT License, including its `AS IS` warranty disclaimer and limitation of liability. It offers no availability, compatibility, stability, or support guarantee. Use it at your own risk and follow the provider's terms. CAPTCHA, login, and account verification always require human intervention; this project is not presented as indetectable and does not attempt to bypass provider controls.
+
+## Requirements
+
+- Node.js 22 or newer.
+- npm.
+- Brave, Chromium, or compatible Chrome.
+- A Gemini account whose authentication is completed manually.
+
+## Install from source
+
+```text
+git clone https://github.com/h-4vok/llmchat-cli.git
+cd llmchat-cli
+npm install
+npm run install:global
+llmchat --help
+```
+
+The package remains private to prevent accidental npm publication. Do not use `npm install --global llmchat-cli`; this repository does not publish a registry package. Remove the local global link with:
+
+```text
+npm run uninstall:global
+```
 
 ## Usage
 
@@ -21,31 +40,11 @@ llmchat health gemini
 llmchat config clear-default-provider
 ```
 
-Use `llmchat --help` and `llmchat config --help` for command usage and supported values. A provider can be passed before or after the prompt; the canonical form is `llmchat chat "<prompt>" --provider <provider>`.
+Use `llmchat --help` and `llmchat config --help` for command usage. Gemini reasoning values are `Standard` and `Extended thinking`; unknown provider-specific values produce a warning and do not stop the chat.
 
-Gemini reasoning values are `"Standard"` and `"Extended thinking"`; the default is `"Standard"`. Values are resolved per Gemini model; unknown provider-specific values produce a warning and do not stop the chat.
+## Alpha limitations and manual checks
 
-## Development
-
-```text
-npm install
-npm run build
-npm test
-```
-
-To install the current checkout as the global `llmchat` command while developing:
-
-```text
-npm run install:global
-llmchat --help
-llmchat chat --provider gemini "hello"
-```
-
-Remove the global development link with `npm run uninstall:global`.
-
-## Manual Gemini health and human test
-
-The Playwright health check is deliberately manual and outside CI. It reuses the dedicated Gemini profile, validates the empty composer, and does not send a prompt. Gemini may hide the send control until text is entered; in that state health reports a deferred capability and does not claim that send was validated:
+The supported provider is currently Gemini. Its selectors, model controls, login state, and response behaviour depend on a volatile web UI. Compatibility can change without a code release. Real Gemini checks are manual, non-deterministic, and outside CI:
 
 ```text
 npm run install:global
@@ -54,21 +53,11 @@ llmchat health gemini
 llmchat chat "Reply with exactly: human-test-ok" --provider gemini --model "<exact visible model name>"
 ```
 
-Use `npm run install:global` before manual CLI testing so the global `llmchat`
-command points to the current checkout. `npm run build` only compiles `dist/`
-and does not update the globally linked command.
+`health` validates the empty composer without sending a prompt. Run the final `chat` command only when intentionally testing text entry, sending, and response extraction. If login, CAPTCHA, or another verification is required, resolve it visibly and manually. A failed check may keep the provider browser open and save local redacted diagnostics and a provider-viewport screenshot.
 
-Run the final `chat` command only when intentionally performing the human test. That smoke chat validates text entry, send, and response extraction. The adapter attempts to select the exact visible model text; if that text is unavailable or selection fails, it continues with Gemini's active model as required by #8. Confirm the visible model outcome during the human smoke—the automated test does not guarantee exact selection. Gemini's web UI is volatile, so selector compatibility must also be confirmed manually after UI changes. A failed UI check keeps the provider browser available and writes redacted local diagnostics plus a provider-viewport screenshot.
+The browser automation currently uses Playwright, a dedicated persistent profile, and passes `--disable-blink-features=AutomationControlled` to the browser for compatibility with the existing alpha flow. That flag is not a stealth guarantee: the project does not promise indetectability or evasion of provider controls, and provider behaviour remains outside its control.
 
-This repository contains the skeleton and the first end-to-end Gemini route. Open decisions are tracked as GitHub issues.
-
-## Adapter contract
-
-`ProviderAdapter` exposes one high-level `executeChat` operation. Its request carries the model, prompt, and optional system-instructions name, and its response carries provider text. The adapter—not the CLI—owns model selection, prompt entry, submission, response extraction, session detection, and UI sequencing. No selector, cookie, token, or browser-UI primitive appears in the shared contract.
-
-The neutral `AdapterContext` contains only dedicated local paths, non-session configuration, and a notifier. Secure storage is provisioned and verified before the CLI obtains the adapter or exposes those paths. Every CLI chat execution passes through the CLI-owned timeout boundary; after expiry it asks the adapter for one of the normalized states `progress`, `error`, `blocked`, or `session-required` and emits that state through the normal error flow. Adapter execution failures use the same flow without inventing a diagnostic. The timeout is cancelled after success, synchronous failure, asynchronous failure, or expiry. Every adapter also supplies a manual health check. Generic request/response parameters allow future provider capabilities to extend the contract without replacing existing adapters.
-
-## Local profiles and diagnostics
+## Local profiles, diagnostics, and privacy
 
 LLM Chat data is separate from normal browser profiles:
 
@@ -76,23 +65,37 @@ LLM Chat data is separate from normal browser profiles:
 - macOS: `~/Library/Application Support/llmchat`
 - Linux: `$XDG_DATA_HOME/llmchat`, falling back to `~/.local/share/llmchat`
 
-Each provider receives isolated `profiles`, `logs`, `diagnostics`, and `screenshots` directories. These directories persist until the user deletes them; the application has no automatic cleanup operation. POSIX directories are created and re-applied as `0700`, while every created or reopened file is re-applied as `0600`. Existing logs are protected before any new bytes are appended and verified again afterward; POSIX appends refuse symbolic links. On Windows, an isolated PowerShell script receives paths as process arguments, replaces inherited ACLs with one explicit Full Control rule for the current identity, and reads the ACL back before storage is accepted.
+Each provider has isolated `profiles`, `logs`, `diagnostics`, and `screenshots` directories. They persist until manually deleted. Diagnostics and screenshots can contain prompts, responses, or visible provider content. Screenshots are limited to the provider page viewport; they must not contain DevTools, browser internals, storage state, or authentication dialogs.
 
-Sequential commands lease and reuse the stable provider profile. If commands overlap, exclusive filesystem leases assign each additional interactive browser a persistent sibling profile named `.concurrent-N`; Chromium therefore never receives the same `userDataDir` concurrently. A secondary slot may require manual sign-in on first use, then keeps its own browser-managed session for later overlapping runs. LLM Chat creates and selects these directories but never reads, copies, or merges browser credentials. Successful commands release only the small lease directory, not profile data; a preserved failure keeps its lease while the process and browser remain available for inspection.
+To remove local data, stop any `llmchat` process and delete the `llmchat` directory under the platform path above. The application does not provide automatic cleanup. Local overrides under `.llmchat-data/`, profiles, logs, diagnostics, screenshots, build output, coverage, and reports are ignored by Git.
 
-Environment overrides and fallback homes must resolve to non-empty absolute paths; storage fails closed for empty, whitespace-only, or relative roots. Local development overrides use `.llmchat-data/`, which is ignored by Git; normal data roots are outside the repository. LLMChat stores private local data but does not integrate with or control the user's backup tools.
+Textual diagnostics use redaction for common cookies, credentials, tokens, API keys, authorization values, and passwords, but redaction is defense in depth and not an authorization boundary. Do not put secrets in prompts or bug reports.
 
-Diagnostic logs may contain prompts and responses. Only their explicit fields are serialized. Text redaction recursively sanitizes sensitive JSON objects and covers key/value or query forms of cookies, Basic/Bearer credentials, tokens, API keys, client secrets, authorization values, and passwords while preserving unrelated query parameters. Complete Cookie and Set-Cookie header values are removed. Adapter errors and timeout diagnostics are sanitized before visual output. Browser profiles remain opaque session containers: application code must never read, log, or emit their cookies, tokens, or passwords.
+## Development
 
-### Security risks and mitigations
+```text
+npm install
+npm run check
+```
 
-| Risk                                                  | Mitigation                                                                                                                                 |
-| ----------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
-| Accidental use of a personal browser session          | Dedicated persistent profile directory per provider; adapters receive only that path.                                                      |
-| Local disclosure of sessions, prompts, or responses   | Absolute per-user data root, repaired `0700`/`0600` POSIX modes, verified current-user Windows ACL, and Git ignore.                        |
-| Secrets copied into textual diagnostics               | Narrow diagnostic schema plus conservative redaction of JSON/key-value secrets and complete cookie headers.                                |
-| Secrets visible inside screenshots                    | Adapters must capture only the provider page viewport, never browser internals, storage state, developer tools, or authentication dialogs. |
-| Insufficient evidence after UI/authentication failure | Logs, sanitized diagnostics, and screenshots remain local with no automatic deletion.                                                      |
-| Provider UI changes or intervention                   | Normalized diagnostics and manual health checks leave UI interpretation in provider code while preserving its profile.                     |
+Tests and CI are offline and deterministic. They never use provider credentials, real browser profiles, or live provider UI. `npm run mutation` is an optional non-blocking diagnostic. See `AGENTS.md` for the engineering rules and `CONTRIBUTING.md` for the contribution workflow.
 
-The redactor is defense in depth, not an authorization boundary. Adapter implementations must not pass session material to output or diagnostic APIs in the first place.
+## Adapter contract
+
+`ProviderAdapter` exposes one high-level `executeChat` operation. Its request carries the model, prompt, and optional system-instructions name, and its response carries provider text. The adapter owns model selection, prompt entry, submission, response extraction, session detection, and UI sequencing. No selector, cookie, token, or browser-UI primitive appears in the shared contract.
+
+The neutral `AdapterContext` contains dedicated local paths, non-session configuration, and a notifier. Secure storage is provisioned and verified before the CLI obtains the adapter or exposes those paths. Timeout and normalized diagnostic behaviour are owned by the CLI boundary; provider adapters also supply a manual health check.
+
+This repository contains an experimental Gemini route. Future compatibility or distribution decisions require a new explicit issue.
+
+## Security risks and mitigations
+
+| Risk                                                | Mitigation                                                              |
+| --------------------------------------------------- | ----------------------------------------------------------------------- |
+| Accidental use of a personal browser session        | Dedicated persistent profile per provider.                              |
+| Local disclosure of sessions, prompts, or responses | Per-user data roots, restricted permissions, and Git ignore rules.      |
+| Secrets in textual diagnostics                      | Narrow diagnostic schema and conservative redaction.                    |
+| Secrets in screenshots                              | Provider viewport only; no browser internals or authentication dialogs. |
+| Provider UI changes or intervention                 | Manual health checks and normalized diagnostics.                        |
+
+Report bugs and propose changes through [GitHub issues](https://github.com/h-4vok/llmchat-cli/issues). Do not include credentials, profiles, screenshots, or private provider content in reports.
