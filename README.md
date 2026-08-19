@@ -80,6 +80,8 @@ npm run check
 
 Tests and CI are offline and deterministic. They never use provider credentials, real browser profiles, or live provider UI. `npm run mutation` is an optional non-blocking diagnostic. See `AGENTS.md` for the engineering rules and `CONTRIBUTING.md` for the contribution workflow.
 
+The canonical code-quality and review criteria are in [`docs/code-quality.md`](docs/code-quality.md).
+
 ## Adapter contract
 
 `ProviderAdapter` exposes one high-level `executeChat` operation. Its request carries the model, prompt, and optional system-instructions name, and its response carries provider text. The adapter owns model selection, prompt entry, submission, response extraction, session detection, and UI sequencing. No selector, cookie, token, or browser-UI primitive appears in the shared contract.

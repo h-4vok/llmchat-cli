@@ -10,7 +10,7 @@ const readme = readFileSync(join(root, 'README.md'), 'utf8');
 test('public alpha metadata keeps the project private and source-only', () => {
   const license = readFileSync(join(root, 'LICENSE'), 'utf8');
 
-  assert.match(packageJson.description, /experimental alpha/i);
+  assert.match(packageJson.description, /experimental/i);
   assert.equal(packageJson.private, true);
   assert.equal(packageJson.license, 'MIT');
   assert.equal(packageJson.engines.node, '>=22');

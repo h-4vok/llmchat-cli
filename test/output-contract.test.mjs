@@ -37,21 +37,18 @@ test('visual output aligns labels, timestamps every line, and keeps color active
   assert.ok(lines.every((line) => line.endsWith(palette.reset)));
 });
 
-test('the central registry can add interlocutors without changing the formatter', () => {
+test('output uses its closed speaker registry', () => {
   const lines = [];
   const output = createOutput({
     write: (line) => lines.push(line),
     now: () => new Date(2026, 7, 11, 9, 7),
-    speakers: { future: { label: 'FUTURE', color: palette.blue } },
+    speakers: { gemini: { label: 'CUSTOM', color: palette.red } },
   });
 
-  output.emit({ speaker: 'future', message: 'hello' });
+  output.emit({ speaker: 'gemini', message: 'hello' });
 
-  assert.equal(lines[0].replace(ansi, ''), 'FUTURE ## [09:07] hello');
-  assert.throws(
-    () => output.emit({ speaker: 'missing', message: 'hello' }),
-    /Unknown output speaker/,
-  );
+  assert.equal(lines[0].replace(ansi, ''), 'GEMINI  ## [09:07] hello');
+  assert.ok(lines[0].startsWith(palette.blue));
 });
 
 test('CLI success and failure share stdout with exit codes 0 and 1', () => {

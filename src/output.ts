@@ -12,11 +12,20 @@ export type Speaker = {
   color: string;
 };
 
-export type SpeakerRegistry = Readonly<Record<string, Speaker>>;
-export type OutputTone = 'normal' | 'warning' | 'error';
+export const speakers = {
+  gemini: { label: 'GEMINI', color: palette.blue },
+  chatgpt: { label: 'CHATGPT', color: palette.terracotta },
+  llmchat: { label: 'LLMCHAT', color: palette.emerald },
+  warning: { label: 'WARNING', color: palette.amber },
+  error: { label: 'ERROR', color: palette.red },
+} satisfies Record<string, Speaker>;
+
+export type SpeakerName = keyof typeof speakers;
+export type SpeakerRegistry = Readonly<Record<SpeakerName, Speaker>>;
+export type OutputTone = 'warning' | 'error';
 
 export type OutputEvent = {
-  speaker: string;
+  speaker: SpeakerName;
   message: string;
   tone?: OutputTone;
 };
@@ -25,45 +34,34 @@ export type Output = {
   emit(event: OutputEvent): void;
 };
 
-export const speakers: SpeakerRegistry = {
-  gemini: { label: 'GEMINI', color: palette.blue },
-  chatgpt: { label: 'CHATGPT', color: palette.terracotta },
-  llmchat: { label: 'LLMCHAT', color: palette.emerald },
-  warning: { label: 'WARNING', color: palette.amber },
-  error: { label: 'ERROR', color: palette.red },
-};
-
 export type OutputOptions = {
   write(line: string): void;
   now?: () => Date;
-  speakers?: SpeakerRegistry;
 };
 
-const toneColors: Partial<Record<OutputTone, string>> = {
+const toneColors: Record<OutputTone, string> = {
   warning: palette.amber,
   error: palette.red,
 };
 
 export function createOutput(options: OutputOptions): Output {
-  const registry = options.speakers ?? speakers;
-  const labelWidth = maximumLabelWidth(registry);
+  const labelWidth = maximumLabelWidth(speakers);
   const now = options.now ?? (() => new Date());
   return {
     emit(event): void {
-      const speaker = selectedSpeaker(registry, event.speaker);
-      const color = toneColors[event.tone ?? 'normal'] ?? speaker.color;
-      const prefix = `${speaker.label.padEnd(labelWidth)} ## [${timestamp(now())}]`;
-      for (const line of event.message.split(/\r?\n/)) {
-        options.write(`${color}${prefix} ${line}${palette.reset}`);
-      }
+      const formattedLines = formatOutputEvent(event, now(), labelWidth);
+      formattedLines.forEach(options.write);
     },
   };
 }
 
-function selectedSpeaker(registry: SpeakerRegistry, name: string): Speaker {
-  const speaker = registry[name];
-  if (!speaker) throw new Error(`Unknown output speaker "${name}".`);
-  return speaker;
+function formatOutputEvent(event: OutputEvent, date: Date, labelWidth: number): string[] {
+  const speaker = speakers[event.speaker];
+  const resolvedColor = toneColors[event.tone!] ?? speaker.color;
+  const formattedPrefix = `${speaker.label.padEnd(labelWidth)} ## [${timestamp(date)}]`;
+  return event.message
+    .split(/\r?\n/)
+    .map((line) => `${resolvedColor}${formattedPrefix} ${line}${palette.reset}`);
 }
 
 function maximumLabelWidth(registry: SpeakerRegistry): number {

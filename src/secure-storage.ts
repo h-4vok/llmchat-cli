@@ -72,8 +72,7 @@ export function saveDiagnostic(
   return saveArtifact(
     provider,
     redactSessionSecrets(content),
-    'txt',
-    'diagnosticsDirectory',
+    { extension: 'txt', directory: 'diagnosticsDirectory' },
     options,
   );
 }
@@ -83,16 +82,21 @@ export function saveScreenshot(
   content: Uint8Array,
   options: StorageOptions = {},
 ): string {
-  return saveArtifact(provider, content, 'png', 'screenshotsDirectory', options);
+  return saveArtifact(
+    provider,
+    content,
+    { extension: 'png', directory: 'screenshotsDirectory' },
+    options,
+  );
 }
 
 function saveArtifact(
   provider: string,
   content: string | Uint8Array,
-  extension: string,
-  directory: 'diagnosticsDirectory' | 'screenshotsDirectory',
+  artifact: { extension: string; directory: 'diagnosticsDirectory' | 'screenshotsDirectory' },
   options: StorageOptions,
 ): string {
+  const { extension, directory } = artifact;
   const paths = ensureProviderStorage(provider, options);
   const name = `${artifactTimestamp(clock(options)())}-${artifactId(options)()}.${extension}`;
   const path = join(paths[directory], name);

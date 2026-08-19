@@ -3,15 +3,25 @@ import type { ChatRuntime } from './chat-runtime.js';
 import type { AdapterContext } from './adapter-contract.js';
 import type { Output } from './output.js';
 import { messages } from './config/messages.js';
+import type { Provider } from './supported-providers.js';
 
-export async function executeChat(
-  runtime: ChatRuntime,
-  provider: string,
-  context: AdapterContext,
-  request: ChatRequest,
-  keepBrowserOpen: boolean,
-  output: Output,
-): Promise<void> {
+export type ChatCommandInput = {
+  runtime: ChatRuntime;
+  provider: Provider;
+  context: AdapterContext;
+  request: ChatRequest;
+  keepBrowserOpen: boolean;
+  output: Output;
+};
+
+export async function executeChat({
+  runtime,
+  provider,
+  context,
+  request,
+  keepBrowserOpen,
+  output,
+}: ChatCommandInput): Promise<void> {
   const unsubscribe = subscribeToActivity(context, output);
   try {
     const session = prepareSession(runtime, provider, context);
@@ -38,14 +48,14 @@ function subscribeToActivity(context: AdapterContext, output: Output): () => voi
 
 function prepareSession(
   runtime: ChatRuntime,
-  provider: string,
+  provider: Provider,
   context: AdapterContext,
 ): Promise<void> | undefined {
   const session = runtime.ensureSession?.(provider, context);
   return session?.then((result) => validateSession(result, provider));
 }
 
-function validateSession(result: { status: string }, provider: string): void {
+function validateSession(result: { status: string }, provider: Provider): void {
   if (result.status === 'indeterminate') throw new Error(messages.geminiLoginRequired);
   if (result.status === 'cancelled') throw new Error(`${provider} authentication was cancelled.`);
 }

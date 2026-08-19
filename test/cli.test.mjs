@@ -8,8 +8,8 @@ import { configFile, run } from '../test-support/cli-helper.mjs';
 test('chat supports provider precedence and deterministic output', () => {
   const configHome = mkdtempSync(join(tmpdir(), 'llmchat-cli-'));
   const missing = run(configHome, 'chat', 'hello');
-  assert.notEqual(missing.status, 0);
-  assert.match(missing.stdout, /No provider selected/);
+  assert.equal(missing.status, 0);
+  assert.match(missing.stdout, /gemini.*hello/i);
   assert.equal(missing.stderr, '');
   const beforePrompt = run(configHome, 'chat', '--provider', 'gemini', 'hello');
   assert.equal(beforePrompt.status, 0);

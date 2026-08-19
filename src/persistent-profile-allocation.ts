@@ -63,8 +63,8 @@ function lease(
   let active = true;
   const release = () => {
     if (!active) return;
-    active = false;
     fileSystem.rmdir(lockDirectory);
+    active = false;
     process.off('exit', release);
   };
   process.once('exit', release);

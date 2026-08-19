@@ -42,8 +42,10 @@ test('a CLI-owned timeout reports the adapter normalized diagnostic', async () =
   let cancellations = 0;
   const adapter = {
     provider: 'chatgpt',
-    async executeChat() {
-      return new Promise(() => {});
+    async executeChat(_request, _context, signal) {
+      return new Promise((_resolve, reject) => {
+        signal.addEventListener('abort', () => reject(signal.reason), { once: true });
+      });
     },
     async diagnose() {
       return { state: 'session-required', message: 'sign in' };

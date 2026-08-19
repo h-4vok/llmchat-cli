@@ -9,14 +9,22 @@ export type ModelSelection = {
   option(text: string): GeminiUiElement;
 };
 
-export async function openModelSelection(page: GeminiUiPage): Promise<ModelSelection> {
-  const opener = await waitForUsable(page, 'model');
+export async function openModelSelection(
+  page: GeminiUiPage,
+  signal?: AbortSignal,
+): Promise<ModelSelection> {
+  const opener = await waitForUsable(page, 'model', signal);
   await opener.click();
   return { opener, option: (text) => page.exactText(text) };
 }
 
-export async function selectModel(page: GeminiUiPage, model: string, emit: Emit): Promise<boolean> {
-  const selection = await openModelSelection(page);
+export async function selectModel(
+  page: GeminiUiPage,
+  model: string,
+  emit: Emit,
+  signal?: AbortSignal,
+): Promise<boolean> {
+  const selection = await openModelSelection(page, signal);
   emit({ kind: 'activity', message: `Gemini model selection command: ${model}` });
   const choice = selection.option(model);
   if (!(await usable(choice))) return false;
@@ -33,20 +41,23 @@ export async function selectReasoningMode(
   requested: string | undefined,
   model: string | undefined,
   emit: Emit,
+  signal?: AbortSignal,
 ): Promise<void> {
   const reasoning = requestedReasoning(resolveGeminiReasoning(model), requested);
   if (!reasoning) return warnUnsupported(requested, emit);
   let selection: ModelSelection;
   try {
-    selection = await openModelSelection(page);
+    selection = await openModelSelection(page, signal);
   } catch {
+    signal?.throwIfAborted();
     return warnReasoning(emit, 'model selector is unavailable');
   }
   const desired = reasoning.extended;
   let choice: GeminiUiElement;
   try {
-    choice = await waitForUsableText(page, selection.option, 'Extended thinking');
+    choice = await waitForUsableText(page, selection.option, 'Extended thinking', signal);
   } catch {
+    signal?.throwIfAborted();
     return warnReasoning(emit, 'reasoning option is unavailable');
   }
   await applyReasoningChoice(choice, selection.opener, desired, emit);
@@ -86,11 +97,14 @@ async function verifyReasoning(
 async function waitForUsable(
   page: GeminiUiPage,
   name: GeminiElementName,
+  signal?: AbortSignal,
 ): Promise<GeminiUiElement> {
   for (let attempt = 0; attempt < 30; attempt += 1) {
+    signal?.throwIfAborted();
     const element = page.element(name);
     if (await usable(element)) return element;
     await page.wait();
+    signal?.throwIfAborted();
   }
   throw new Error(`Gemini UI changed: ${name} selector did not become usable.`);
 }
@@ -99,11 +113,14 @@ async function waitForUsableText(
   page: GeminiUiPage,
   option: (text: string) => GeminiUiElement,
   text: string,
+  signal?: AbortSignal,
 ): Promise<GeminiUiElement> {
   for (let attempt = 0; attempt < 30; attempt += 1) {
+    signal?.throwIfAborted();
     const element = option(text);
     if (await usable(element)) return element;
     await page.wait();
+    signal?.throwIfAborted();
   }
   throw new Error(`Gemini UI changed: ${text} option did not become usable.`);
 }

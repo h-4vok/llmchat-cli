@@ -46,7 +46,6 @@ export interface GeminiUiPage extends GeminiArtifactPage {
 }
 
 export type { GeminiArtifactPort } from './gemini-failure-artifacts.js';
-
 const newConversationUrl = geminiConfig.appUrl;
 const geminiFallbackModel = '3.5 Flash-Lite';
 
@@ -57,16 +56,18 @@ export function createGeminiUiConversation(
 ): GeminiConversation {
   const waitForIntervention = createGeminiInterventionWaiter(page, notifications);
   return {
-    async submit(request, emit) {
+    async submit(request, emit, signal) {
       await page.goto(newConversationUrl);
-      await waitForIntervention(emit);
-      if (request.disposableConversation) await enableTemporaryChat(page);
-      await selectModel(page, request.model, emit);
+      throwIfAborted(signal);
+      await waitForIntervention(emit, signal);
+      if (request.disposableConversation) await enableTemporaryChat(page, signal);
+      await selectModel(page, request.model, emit, signal);
       if (request.reasoning !== undefined)
-        await selectReasoningMode(page, request.reasoning, request.model, emit);
-      await (await required(page, 'composer')).fill(request.prompt);
-      await (await required(page, 'send')).click();
-      await monitor(page, emit, waitForIntervention);
+        await selectReasoningMode(page, request.reasoning, request.model, emit, signal);
+      await (await required(page, 'composer', signal)).fill(request.prompt);
+      throwIfAborted(signal);
+      await (await required(page, 'send', signal)).click();
+      await monitor(page, emit, waitForIntervention, signal);
     },
     diagnoseLocally: () => diagnose(page),
     persistFailure: (error) => persistGeminiFailure(page, artifacts, error),
@@ -74,38 +75,43 @@ export function createGeminiUiConversation(
     waitForClose: () => page.waitForClose(),
   };
 }
-
-async function enableTemporaryChat(page: GeminiUiPage): Promise<void> {
-  await (await required(page, 'temporaryChat')).click();
+async function enableTemporaryChat(page: GeminiUiPage, signal?: AbortSignal): Promise<void> {
+  await (await required(page, 'temporaryChat', signal)).click();
 }
-
 async function selectModel(
   page: GeminiUiPage,
   model: string | undefined,
   emit: (signal: GeminiSignal) => void,
+  cancellation?: AbortSignal,
 ): Promise<void> {
   if (!model) return;
   try {
-    const selected = await selectModelFromMenu(page, model, emit);
-    if (!selected) await selectModelFromMenu(page, geminiFallbackModel, emit);
+    const selected = await selectModelFromMenu(page, model, emit, cancellation);
+    if (!selected) await selectModelFromMenu(page, geminiFallbackModel, emit, cancellation);
   } catch {
+    throwIfAborted(cancellation);
     return;
   }
 }
-
 async function monitor(
   page: GeminiUiPage,
   emit: (signal: GeminiSignal) => void,
-  waitForIntervention: (emit: (signal: GeminiSignal) => void) => Promise<void>,
+  waitForIntervention: (
+    emit: (signal: GeminiSignal) => void,
+    signal?: AbortSignal,
+  ) => Promise<void>,
+  signal?: AbortSignal,
 ): Promise<void> {
   while (true) {
-    await waitForIntervention(emit);
+    throwIfAborted(signal);
+    await waitForIntervention(emit, signal);
     const terminal = await terminalSignal(page);
     if (terminal) return emit(terminal);
     if (await page.element('stop').visible()) {
       emit({ kind: 'activity', message: 'Gemini is composing.' });
     }
     await page.wait();
+    throwIfAborted(signal);
   }
 }
 
@@ -118,8 +124,13 @@ async function terminalSignal(page: GeminiUiPage): Promise<GeminiSignal | undefi
   return undefined;
 }
 
-async function required(page: GeminiUiPage, name: GeminiElementName): Promise<GeminiUiElement> {
+async function required(
+  page: GeminiUiPage,
+  name: GeminiElementName,
+  signal?: AbortSignal,
+): Promise<GeminiUiElement> {
   for (let attempt = 0; attempt < 30; attempt += 1) {
+    throwIfAborted(signal);
     const element = page.element(name);
     if (await element.visible()) return element;
     await page.wait();
@@ -127,6 +138,9 @@ async function required(page: GeminiUiPage, name: GeminiElementName): Promise<Ge
   throw new Error(`Gemini UI changed: required ${name} selector is not usable.`);
 }
 
+function throwIfAborted(signal?: AbortSignal): void {
+  signal?.throwIfAborted();
+}
 async function diagnose(page: GeminiUiPage): Promise<{ state: string; message: string }> {
   const error = page.element('error');
   if (await error.visible()) {

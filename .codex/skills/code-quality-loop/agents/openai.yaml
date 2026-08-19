@@ -1,0 +1,4 @@
+interface:
+  display_name: 'Code Quality Loop'
+  short_description: 'Turn review corrections into durable code-quality rules'
+  default_prompt: 'Use this workflow to capture corrections, extract reusable rules, automate safe checks, update canonical docs, and validate with lint and review.'

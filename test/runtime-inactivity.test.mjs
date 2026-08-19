@@ -29,14 +29,17 @@ function manualTimeout() {
 
 function fixture(timeout) {
   let resolveResponse = () => {};
+  let rejectResponse = () => {};
   let executionContext;
-  const response = new Promise((resolve) => {
+  const response = new Promise((resolve, reject) => {
     resolveResponse = resolve;
+    rejectResponse = reject;
   });
   const adapter = {
     provider: 'gemini',
-    executeChat(_request, context) {
+    executeChat(_request, context, signal) {
       executionContext = context;
+      signal.addEventListener('abort', () => rejectResponse(signal.reason), { once: true });
       return response;
     },
     async diagnose() {

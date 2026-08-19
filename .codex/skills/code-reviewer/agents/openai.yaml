@@ -1,0 +1,4 @@
+interface:
+  display_name: 'Code Reviewer'
+  short_description: 'Review code with lint-first semantic checks'
+  default_prompt: 'Review this code, run the project lint command, and assess semantic design rules with justified exceptions.'

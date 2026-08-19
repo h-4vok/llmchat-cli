@@ -12,6 +12,7 @@ import { geminiSelectors } from './gemini-selectors.js';
 import { geminiConfig } from './config/gemini.js';
 import { runtimeConfig } from './config/runtime.js';
 import { saveDiagnostic, saveScreenshot } from './secure-storage.js';
+import { initializeBrowserContext } from './playwright-browser-initialization.js';
 
 const providerUrls: Record<string, string> = { gemini: geminiConfig.appUrl };
 
@@ -64,16 +65,8 @@ async function launchBrowser(
     ignoreDefaultArgs: ['--no-sandbox'],
     args: ['--disable-blink-features=AutomationControlled'],
   });
-  const page = await preparePage(context);
-  await page.goto(url);
+  const page = await initializeBrowserContext(context, url);
   return playwrightWindow(context, page, request, options);
-}
-
-async function preparePage(context: BrowserContext): Promise<Page> {
-  const pages = context.pages();
-  const page = pages[0] ?? (await context.newPage());
-  await Promise.all(pages.slice(1).map((extra) => extra.close().catch(() => undefined)));
-  return page;
 }
 
 function runtimeOptions(): PlaywrightLauncherOptions {
@@ -100,18 +93,21 @@ function playwrightWindow(
         .catch((error) =>
           page.isClosed() || String(error).includes('closed') ? undefined : Promise.reject(error),
         ),
-    persistFailure: (error) => persistLauncherFailure(context, page, request, options, error),
+    persistFailure: (error) => persistLauncherFailure({ context, page, request, options }, error),
     close: () => context.close(),
   };
 }
 
 async function persistLauncherFailure(
-  context: BrowserContext,
-  page: Page,
-  request: PersistentBrowserRequest,
-  options: PlaywrightLauncherOptions,
+  dependencies: {
+    context: BrowserContext;
+    page: Page;
+    request: PersistentBrowserRequest;
+    options: PlaywrightLauncherOptions;
+  },
   error: Error,
 ): Promise<void> {
+  const { context, page, request, options } = dependencies;
   const artifacts = {
     saveDiagnostic: async (content: string) =>
       void options.saveDiagnostic(request.provider, content),

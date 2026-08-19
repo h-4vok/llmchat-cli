@@ -80,6 +80,38 @@ test('inactivity fails after requesting one local diagnostic', async () => {
   assert.equal(session.diagnosisCount(), 1);
 });
 
+test('inactivity aborts submission and waits for it to settle before diagnosis', async () => {
+  const timeout = manualTimeout();
+  let settleSubmission = () => {};
+  const calls = [];
+  const port = {
+    submit(_request, _emit, signal) {
+      return new Promise((_resolve, reject) => {
+        signal.addEventListener('abort', () => {
+          calls.push('aborted');
+          settleSubmission = () => {
+            calls.push('settled');
+            reject(signal.reason);
+          };
+        });
+      });
+    },
+    async diagnoseLocally() {
+      calls.push('diagnosed');
+      return { state: 'stalled', message: 'composer stopped' };
+    },
+  };
+  const execution = executeGeminiPrompt(port, { prompt: 'hello' }, timeout.options);
+
+  timeout.timers[0].expire();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(calls, ['aborted']);
+  settleSubmission();
+
+  await assert.rejects(execution, GeminiInactivityError);
+  assert.deepEqual(calls, ['aborted', 'settled', 'diagnosed']);
+});
+
 test('activity and timeout never resend the prompt', async () => {
   const timeout = manualTimeout();
   const session = pendingSession();

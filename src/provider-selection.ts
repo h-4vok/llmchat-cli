@@ -1,23 +1,18 @@
-import { readCurrentConfig } from './config.js';
+import { resolveConfig } from './config.js';
+import { supportedProviders, type Provider } from './supported-providers.js';
 
-const supportedProvider = 'gemini';
-
-export function selectedProvider(override: string | undefined): string {
-  if (override) return validatedProvider(override);
-  const provider = readCurrentConfig().defaultProvider;
-  if (!provider) throw new Error(noProviderMessage());
-  return validatedProvider(provider);
-}
-
-export function validatedProvider(provider: string): string {
-  if (provider !== supportedProvider) {
-    throw new Error(
-      `Unsupported provider "${provider}". Supported providers: ${supportedProvider}.`,
-    );
+export function resolveProvider(provider: string | undefined): Provider {
+  const resolvedProvider = provider ?? resolveConfig().defaultProvider;
+  if (!isValidProvider(resolvedProvider)) {
+    throw new Error(unsupportedProviderMessage(resolvedProvider));
   }
-  return provider;
+  return resolvedProvider;
 }
 
-function noProviderMessage(): string {
-  return 'No provider selected. Set a default with "llmchat config set-default-provider gemini" or pass "--provider gemini".';
+export function isValidProvider(provider: string): provider is Provider {
+  return supportedProviders.includes(provider as Provider);
+}
+
+function unsupportedProviderMessage(provider: string): string {
+  return `Unsupported provider "${provider}". Supported providers: ${supportedProviders.join(', ')}.`;
 }
