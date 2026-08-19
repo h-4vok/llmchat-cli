@@ -5,7 +5,7 @@ import { printConfigHelp, printRootHelp } from './cli-help.js';
 import { removeDefaultProvider, saveDefaultProvider } from './config.js';
 import { errorMessage } from './error-format.js';
 import type { Output } from './output.js';
-import { selectedProvider, validatedProvider } from './provider-selection.js';
+import { resolveProvider } from './provider-selection.js';
 import { redactSessionSecrets } from './secret-redaction.js';
 import { withRuntimeContext } from './runtime-context.js';
 import { messages } from './config/messages.js';
@@ -79,7 +79,7 @@ const configActions: Record<string, ConfigHandler> = {
 function setDefaultProvider(args: string[]): void {
   if (args.length !== 2)
     throw new Error('Invalid config command. Use "llmchat config --help" for usage.');
-  saveDefaultProvider(validatedProvider(args[1]));
+  saveDefaultProvider(resolveProvider(args[1]));
 }
 
 function clearDefaultProvider(args: string[]): void {
@@ -92,10 +92,17 @@ async function runChat(args: string[], output: Output, runtime: ChatRuntime): Pr
   const parsed = parseChat(args);
   if (parsed.help) return printRootHelp(output);
   if (!parsed.prompt) throw new Error('A prompt is required.');
-  const provider = selectedProvider(parsed.provider);
+  const provider = resolveProvider(parsed.provider);
   const request = chatRequest(parsed);
   await withRuntimeContext(runtime, provider, async (context) => {
-    await executeChat(runtime, provider, context, request, Boolean(parsed.keepBrowserOpen), output);
+    await executeChat({
+      runtime,
+      provider,
+      context,
+      request,
+      keepBrowserOpen: Boolean(parsed.keepBrowserOpen),
+      output,
+    });
   });
 }
 function chatRequest(parsed: ReturnType<typeof parseChat>) {
@@ -111,7 +118,7 @@ function chatRequest(parsed: ReturnType<typeof parseChat>) {
 
 async function runAuth(args: string[], output: Output, runtime: ChatRuntime): Promise<void> {
   if (args.length !== 1) throw new Error('Usage: llmchat auth <provider>.');
-  const provider = validatedProvider(args[0]);
+  const provider = resolveProvider(args[0]);
   await withRuntimeContext(runtime, provider, async (context) => {
     const session = requireSession(runtime, provider, context, { visible: true });
     const result = session ? await session : undefined;
@@ -128,7 +135,7 @@ function emitAuthSuccess(output: Output, result: BrowserSessionResult | undefine
 
 async function runHealth(args: string[], output: Output, runtime: ChatRuntime): Promise<void> {
   if (args.length !== 1) throw new Error('Usage: llmchat health <provider>.');
-  const provider = validatedProvider(args[0]);
+  const provider = resolveProvider(args[0]);
   await withRuntimeContext(runtime, provider, async (context) => {
     const health = await runtime.adapterFor(provider).checkHealth(context);
     if (health.status === 'broken') throw new Error(health.message);

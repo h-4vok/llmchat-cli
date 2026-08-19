@@ -100,18 +100,21 @@ function playwrightWindow(
         .catch((error) =>
           page.isClosed() || String(error).includes('closed') ? undefined : Promise.reject(error),
         ),
-    persistFailure: (error) => persistLauncherFailure(context, page, request, options, error),
+    persistFailure: (error) => persistLauncherFailure({ context, page, request, options }, error),
     close: () => context.close(),
   };
 }
 
 async function persistLauncherFailure(
-  context: BrowserContext,
-  page: Page,
-  request: PersistentBrowserRequest,
-  options: PlaywrightLauncherOptions,
+  dependencies: {
+    context: BrowserContext;
+    page: Page;
+    request: PersistentBrowserRequest;
+    options: PlaywrightLauncherOptions;
+  },
   error: Error,
 ): Promise<void> {
+  const { context, page, request, options } = dependencies;
   const artifacts = {
     saveDiagnostic: async (content: string) =>
       void options.saveDiagnostic(request.provider, content),

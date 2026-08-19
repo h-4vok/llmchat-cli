@@ -2,20 +2,19 @@ import { readCurrentConfig } from './config.js';
 
 const supportedProvider = 'gemini';
 
-export function selectedProvider(override: string | undefined): string {
-  if (override) return validatedProvider(override);
-  const provider = readCurrentConfig().defaultProvider;
+export function resolveProvider(explicit: string | undefined): string {
+  const provider = explicit ?? readCurrentConfig().defaultProvider;
   if (!provider) throw new Error(noProviderMessage());
-  return validatedProvider(provider);
+  if (!isValidProvider(provider)) throw new Error(unsupportedProviderMessage(provider));
+  return provider;
 }
 
-export function validatedProvider(provider: string): string {
-  if (provider !== supportedProvider) {
-    throw new Error(
-      `Unsupported provider "${provider}". Supported providers: ${supportedProvider}.`,
-    );
-  }
-  return provider;
+export function isValidProvider(provider: string): boolean {
+  return provider === supportedProvider;
+}
+
+function unsupportedProviderMessage(provider: string): string {
+  return `Unsupported provider "${provider}". Supported providers: ${supportedProvider}.`;
 }
 
 function noProviderMessage(): string {

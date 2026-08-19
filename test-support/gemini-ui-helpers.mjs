@@ -1,4 +1,4 @@
-export function createChoice(calls, text, visible, enabled, select) {
+export function createGeminiChoiceStub({ calls, text, visible, enabled, select }) {
   return {
     async visible() {
       return visible;

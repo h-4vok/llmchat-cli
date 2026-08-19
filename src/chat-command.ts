@@ -4,14 +4,23 @@ import type { AdapterContext } from './adapter-contract.js';
 import type { Output } from './output.js';
 import { messages } from './config/messages.js';
 
-export async function executeChat(
-  runtime: ChatRuntime,
-  provider: string,
-  context: AdapterContext,
-  request: ChatRequest,
-  keepBrowserOpen: boolean,
-  output: Output,
-): Promise<void> {
+export type ChatCommandInput = {
+  runtime: ChatRuntime;
+  provider: string;
+  context: AdapterContext;
+  request: ChatRequest;
+  keepBrowserOpen: boolean;
+  output: Output;
+};
+
+export async function executeChat({
+  runtime,
+  provider,
+  context,
+  request,
+  keepBrowserOpen,
+  output,
+}: ChatCommandInput): Promise<void> {
   const unsubscribe = subscribeToActivity(context, output);
   try {
     const session = prepareSession(runtime, provider, context);

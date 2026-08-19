@@ -15,7 +15,17 @@ export default tseslint.config(
     },
     rules: {
       complexity: ['error', 4],
+      'max-depth': ['error', 4],
+      'max-params': ['warn', 4],
       'max-lines': ['error', { max: 150, skipBlankLines: true, skipComments: true }],
+      'no-constant-binary-expression': 'error',
+      'no-duplicate-case': 'error',
+      'no-else-return': 'error',
+      'no-unreachable': 'error',
+      'no-useless-catch': 'error',
+      'no-useless-constructor': 'error',
+      '@typescript-eslint/no-duplicate-enum-values': 'error',
+      '@typescript-eslint/no-useless-constructor': 'error',
     },
   },
 );
