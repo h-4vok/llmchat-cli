@@ -8,7 +8,7 @@ Review criteria, not laws. Exceptions OK: contract, boundary, perf, framework, c
 - **Orchestration ≠ operations.** Separate sequencing/policy from parse/validate/store/format/UI work.
 - **Coherent contract.** Unit must not mix incompatible questions, transforms, effects, error policies.
 - **Contextual errors.** Handle error where meaning is knowable: recover, translate, contextualize, propagate. Exceptions justified.
-- **Names.** Express purpose, role, observable contract—not mechanism. Actions: `resolveProvider`, `saveArtifact`. Predicates: `isValidProvider`, `hasSession`. Examples, not taxonomy.
+- **Names.** Name public params by caller concept, not impl detail. Derived locals: `resolvedX`/`effectiveX`/`normalizedX`. Actions: `resolveProvider`, `saveArtifact`; predicates: `isValidProvider`, `hasSession`. Examples, not taxonomy.
 
 ## Ask
 
