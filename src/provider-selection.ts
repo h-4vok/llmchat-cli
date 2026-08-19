@@ -1,7 +1,7 @@
 import { resolveConfig } from './config.js';
-import { supportedProviders } from './supported-providers.js';
+import { supportedProviders, type Provider } from './supported-providers.js';
 
-export function resolveProvider(provider: string | undefined): string {
+export function resolveProvider(provider: string | undefined): Provider {
   const resolvedProvider = provider ?? resolveConfig().defaultProvider;
   if (!isValidProvider(resolvedProvider)) {
     throw new Error(unsupportedProviderMessage(resolvedProvider));
@@ -9,8 +9,8 @@ export function resolveProvider(provider: string | undefined): string {
   return resolvedProvider;
 }
 
-export function isValidProvider(provider: string): boolean {
-  return supportedProviders.includes(provider as (typeof supportedProviders)[number]);
+export function isValidProvider(provider: string): provider is Provider {
+  return supportedProviders.includes(provider as Provider);
 }
 
 function unsupportedProviderMessage(provider: string): string {

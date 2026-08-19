@@ -18,12 +18,13 @@ export function createGeminiInterventionWaiter(
     notified = true;
     await notifications.send(authenticationAttention('gemini'));
   }
-  return async (emit: Emit): Promise<void> => {
+  return async (emit: Emit, signal?: AbortSignal): Promise<void> => {
+    signal?.throwIfAborted();
     const intervention = await observeIntervention(page);
     if (!intervention) return;
     if (intervention === 'cancelled') throw cancellationError();
     await notifyOnce();
-    await waitUntilResolved(page, intervention, emit);
+    await waitUntilResolved(page, intervention, emit, signal);
   };
 }
 
@@ -31,12 +32,15 @@ async function waitUntilResolved(
   page: GeminiUiPage,
   initial: Intervention,
   emit: Emit,
+  signal?: AbortSignal,
 ): Promise<void> {
   let intervention: Intervention | undefined = initial;
   while (intervention) {
+    signal?.throwIfAborted();
     if (intervention === 'cancelled') throw cancellationError();
     emit({ kind: 'activity', message: `Gemini awaits manual ${intervention} resolution.` });
     await page.wait();
+    signal?.throwIfAborted();
     intervention = await observeIntervention(page);
   }
 }

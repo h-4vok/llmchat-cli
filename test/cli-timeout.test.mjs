@@ -19,8 +19,10 @@ function timeoutDependencies(state) {
   let expire = () => {};
   const adapter = {
     provider: 'gemini',
-    async executeChat() {
-      return new Promise(() => {});
+    async executeChat(_request, _context, signal) {
+      return new Promise((_resolve, reject) =>
+        signal.addEventListener('abort', () => reject(signal.reason), { once: true }),
+      );
     },
     async diagnose() {
       return { state, message: `diagnostic ${state} token=diagnostic-secret&safe=visible` };

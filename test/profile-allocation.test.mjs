@@ -58,6 +58,26 @@ test('allocation failures other than an occupied lock fail clearly', (t) => {
   assert.throws(() => createPersistentProfileAllocator(fileSystem).acquire(root), denied);
 });
 
+test('a failed lease release remains retryable', () => {
+  const failure = new Error('temporary removal failure');
+  let removals = 0;
+  const allocator = createPersistentProfileAllocator({
+    mkdir() {},
+    chmod() {},
+    rmdir() {
+      removals += 1;
+      if (removals === 1) throw failure;
+    },
+  });
+  const lease = allocator.acquire('/profiles/gemini');
+
+  assert.throws(() => lease.release(), failure);
+  lease.release();
+  lease.release();
+
+  assert.equal(removals, 2);
+});
+
 test('derived concurrent profile is the real persistent launch argument', async (t) => {
   const stable = workspace(t);
   const allocator = createPersistentProfileAllocator();

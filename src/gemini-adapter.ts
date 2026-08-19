@@ -8,6 +8,7 @@ import type {
 } from './adapter-contract.js';
 import {
   executeGeminiPrompt,
+  GeminiInactivityError,
   type GeminiPromptPort,
   type GeminiPromptRequest,
 } from './gemini-flow.js';
@@ -33,7 +34,7 @@ export function createGeminiAdapter(options: GeminiAdapterOptions): ProviderAdap
   let diagnostic: AdapterDiagnostic = { state: 'progress', message: 'Gemini is idle.' };
   return {
     provider: 'gemini',
-    async executeChat(request, context) {
+    async executeChat(request, context, signal = new AbortController().signal) {
       const conversation = await options.browser.open(context);
       try {
         const response = await runConversation(
@@ -41,6 +42,7 @@ export function createGeminiAdapter(options: GeminiAdapterOptions): ProviderAdap
           request,
           context,
           options.inactivityMs,
+          signal,
         );
         if (!request.keepBrowserOpen) await conversation.close();
         diagnostic = { state: 'progress', message: 'Gemini response completed.' };
@@ -52,6 +54,7 @@ export function createGeminiAdapter(options: GeminiAdapterOptions): ProviderAdap
         const error = asError(failure);
         diagnostic = { state: 'error', message: redactDiagnosticText(error.message) };
         await conversation.persistFailure(error);
+        if (signal.aborted || error instanceof GeminiInactivityError) await conversation.close();
         throw error;
       }
     },
@@ -67,6 +70,7 @@ async function runConversation(
   request: ChatRequest,
   context: AdapterContext,
   inactivityMs: number,
+  signal: AbortSignal,
 ): Promise<ChatResponse> {
   const prompt: GeminiPromptRequest = {
     prompt: request.prompt,
@@ -77,6 +81,7 @@ async function runConversation(
     prompt.disposableConversation = request.disposableConversation;
   return executeGeminiPrompt(conversation, prompt, {
     inactivityMs,
+    signal,
     onActivity: ({ message }) =>
       context.notify({ kind: 'progress', message: redactDiagnosticText(message) }),
   });

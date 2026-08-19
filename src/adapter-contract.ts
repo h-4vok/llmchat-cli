@@ -5,12 +5,10 @@ export type AdapterDiagnostic = {
   state: DiagnosticState;
   message: string;
 };
-
 export type AdapterHealth = {
   status: HealthStatus;
   message: string;
 };
-
 export type AdapterNotification = {
   kind: 'progress' | 'warning';
   message: string;
@@ -24,7 +22,6 @@ export type AdapterContext = {
   notify(notification: AdapterNotification): void;
   onActivity?(listener: (notification: AdapterNotification) => void): () => void;
 };
-
 export type ChatRequest = {
   prompt: string;
   model?: string;
@@ -33,7 +30,6 @@ export type ChatRequest = {
   keepBrowserOpen?: boolean;
   disposableConversation?: boolean;
 };
-
 export class DisposableConversationUnsupportedError extends Error {
   constructor(provider: string) {
     super(`Provider ${provider} does not support disposable conversations.`);
@@ -51,7 +47,8 @@ export interface ProviderAdapter<
   Response extends ChatResponse = ChatResponse,
 > {
   readonly provider: string;
-  executeChat(request: Request, context: AdapterContext): Promise<Response>;
+  /** Must settle after signal aborts so its context can be released safely. */
+  executeChat(request: Request, context: AdapterContext, signal: AbortSignal): Promise<Response>;
   diagnose(context: AdapterContext): Promise<AdapterDiagnostic>;
   checkHealth(context: AdapterContext): Promise<AdapterHealth>;
 }
@@ -87,8 +84,9 @@ export async function executeWithTimeout<
   const schedule = timeoutScheduler(options);
   const inactivity = createInactivityTimer(schedule, options.timeoutMs);
   const unsubscribe = subscribeToActivity(context, inactivity.reset);
+  const cancellation = new AbortController();
   const operation = Promise.resolve()
-    .then(() => adapter.executeChat(request, context))
+    .then(() => adapter.executeChat(request, context, cancellation.signal))
     .then((response): ResponseOutcome<Response> => ({ kind: 'response', response }));
   let outcome: ResponseOutcome<Response> | TimeoutOutcome;
   try {
@@ -98,6 +96,8 @@ export async function executeWithTimeout<
     unsubscribe();
   }
   if (outcome.kind === 'response') return outcome.response;
+  cancellation.abort(new DOMException('Adapter execution timed out.', 'TimeoutError'));
+  await operation.catch(ignore);
   throw new AdapterTimeoutError(await adapter.diagnose(context));
 }
 

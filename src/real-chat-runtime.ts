@@ -66,7 +66,8 @@ function withSessionDiagnostic(
 ): ProviderAdapter {
   return {
     provider: adapter.provider,
-    executeChat: (request, context) => adapter.executeChat(request, profiles.context(context)),
+    executeChat: (request, context, signal) =>
+      adapter.executeChat(request, profiles.context(context), signal),
     async diagnose(context) {
       const diagnostic = diagnostics.get(context);
       if (isSessionBlocking(diagnostic)) return diagnostic;

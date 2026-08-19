@@ -105,6 +105,21 @@ test('detached Playwright locators are treated as not visible', async () => {
   assert.equal(await boundary.element('error').visible(), false);
 });
 
+test('Temporary chat targets the current component host', () => {
+  const selectors = [];
+  const page = {
+    locator(selector) {
+      selectors.push(selector);
+      return locator([], selector);
+    },
+  };
+  const boundary = createGeminiPlaywrightPage(page, {});
+
+  boundary.element('temporaryChat');
+
+  assert.deepEqual(selectors, ['temp-chat-button']);
+});
+
 test('selected Playwright menu items expose active state', async () => {
   const page = { locator: () => locator([], 'selected') };
   const boundary = createGeminiPlaywrightPage(page, {});
