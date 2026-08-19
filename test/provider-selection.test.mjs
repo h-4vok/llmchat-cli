@@ -21,13 +21,25 @@ function withConfig(defaultProvider, callback) {
 }
 
 test('resolveProvider prefers explicit provider and validates once', () => {
-  assert.equal(withConfig('unsupported', () => resolveProvider('gemini')), 'gemini');
+  assert.equal(
+    withConfig('unsupported', () => resolveProvider('gemini')),
+    'gemini',
+  );
 });
 
-test('resolveProvider uses configured provider and decides errors', () => {
-  assert.equal(withConfig('gemini', () => resolveProvider(undefined)), 'gemini');
-  assert.throws(() => withConfig('unsupported', () => resolveProvider(undefined)), /Unsupported provider/);
-  assert.throws(() => withConfig(undefined, () => resolveProvider(undefined)), /No provider selected/);
+test('resolveProvider uses configured provider and defaults when absent', () => {
+  assert.equal(
+    withConfig('gemini', () => resolveProvider(undefined)),
+    'gemini',
+  );
+  assert.throws(
+    () => withConfig('unsupported', () => resolveProvider(undefined)),
+    /Unsupported provider/,
+  );
+  assert.equal(
+    withConfig(undefined, () => resolveProvider(undefined)),
+    'gemini',
+  );
 });
 
 test('isValidProvider answers validity without throwing', () => {

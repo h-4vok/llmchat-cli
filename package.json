@@ -26,7 +26,7 @@
     "test": "npm run build && npm run test:unit",
     "test:integration": "npm run build && node --test \"test/integration/*.test.mjs\"",
     "lint": "eslint \"src/**/*.ts\" \"test/**/*.mjs\" \"test-support/**/*.mjs\"",
-  "coverage": "npm run build && c8 --all --extension .ts --include \"src/**/*.ts\" --exclude-after-remap --check-coverage --lines 100 --functions 100 --branches 100 npm run test:unit",
+    "coverage": "npm run build && c8 --all --extension .ts --include \"src/**/*.ts\" --exclude-after-remap --check-coverage --lines 100 --functions 100 --branches 100 npm run test:unit",
     "mutation": "stryker run",
     "check": "npm run format:check && npm run lint && npm test && npm run coverage",
     "start": "node dist/cli.js",

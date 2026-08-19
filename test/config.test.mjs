@@ -3,7 +3,7 @@ import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
-import { readConfig } from '../dist/config.js';
+import { applyDefaults, readConfig } from '../dist/config.js';
 
 function tempFile(content) {
   const directory = mkdtempSync(join(tmpdir(), 'llmchat-config-'));
@@ -34,4 +34,14 @@ test('readConfig preserves the parsing failure as an error cause', () => {
     () => readConfig(tempFile('not json')),
     (error) => error.cause instanceof Error && /Unable to read/.test(error.message),
   );
+});
+
+test('applyDefaults fills missing configuration values without changing the input', () => {
+  const config = {};
+
+  assert.deepEqual(applyDefaults(config), {
+    schemaVersion: 1,
+    defaultProvider: 'gemini',
+  });
+  assert.deepEqual(config, {});
 });

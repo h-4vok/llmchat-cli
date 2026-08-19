@@ -1,8 +1,12 @@
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { configPath } from './config-path.js';
+import { defaultProvider } from './supported-providers.js';
 
 export type Config = { schemaVersion: 1; defaultProvider?: string; [key: string]: unknown };
+export type ResolvedConfig = Omit<Config, 'defaultProvider'> & { defaultProvider: string };
+
+const defaultConfig: Config = { schemaVersion: 1, defaultProvider };
 
 export function readConfig(path: string): Partial<Config> {
   try {
@@ -12,17 +16,25 @@ export function readConfig(path: string): Partial<Config> {
   }
 }
 
-export function readCurrentConfig(): Partial<Config> {
-  return readConfig(configPath());
+export function resolveConfig(): ResolvedConfig {
+  return applyDefaults(readConfig(configPath()));
+}
+
+export function applyDefaults(config: Partial<Config>): ResolvedConfig {
+  return {
+    ...defaultConfig,
+    ...config,
+    defaultProvider: config.defaultProvider ?? defaultProvider,
+  };
 }
 
 export function saveDefaultProvider(provider: string): void {
-  const config = readCurrentConfig();
+  const config = readConfig(configPath());
   writeConfig({ ...config, schemaVersion: 1, defaultProvider: provider });
 }
 
 export function removeDefaultProvider(): void {
-  const config = readCurrentConfig();
+  const config = readConfig(configPath());
   if (!Object.hasOwn(config, 'defaultProvider')) return;
   delete config.defaultProvider;
   writeConfig({ ...config, schemaVersion: 1 });
