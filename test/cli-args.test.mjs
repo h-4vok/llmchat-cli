@@ -11,6 +11,7 @@ test('parseChat collects prompt words and provider options', () => {
     systemInstructions: undefined,
     keepBrowserOpen: false,
     disposableConversation: false,
+    output: 'text',
   });
 });
 
@@ -40,8 +41,8 @@ test('parseChat accepts every system-instructions alias', () => {
 });
 
 test('parseChat recognizes help without parsing the remaining arguments', () => {
-  assert.deepEqual(parseChat(['--help', '--unknown']), { help: true });
-  assert.deepEqual(parseChat(['-h']), { help: true });
+  assert.deepEqual(parseChat(['--help', '--unknown']), { help: true, output: 'text' });
+  assert.deepEqual(parseChat(['-h']), { help: true, output: 'text' });
 });
 
 test('parseChat recognizes keep-browser-open without consuming a value', () => {
@@ -50,6 +51,14 @@ test('parseChat recognizes keep-browser-open without consuming a value', () => {
 
 test('parseChat recognizes disposable-conversation without consuming a value', () => {
   assert.equal(parseChat(['--disposable-conversation', 'hello']).disposableConversation, true);
+});
+
+test('parseChat accepts each structured output format and defaults to text', () => {
+  assert.equal(parseChat(['hello']).output, 'text');
+  for (const format of ['text', 'json', 'jsonl', 'yaml']) {
+    assert.equal(parseChat(['hello', '--output', format]).output, format);
+  }
+  assert.throws(() => parseChat(['hello', '--output', 'xml']), /Unsupported output format/);
 });
 
 test('parseChat rejects missing option values', () => {

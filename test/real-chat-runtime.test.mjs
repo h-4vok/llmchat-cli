@@ -108,7 +108,10 @@ test('real runtime delegates adapter operations and keeps native notifications l
   context.notify({ kind: 'progress', message: 'ignored' });
   const wrapped = runtime.adapterFor('gemini');
   assert.deepEqual(await wrapped.executeChat({ prompt: 'hello' }, context), { text: 'done' });
-  assert.deepEqual(await wrapped.checkHealth(context), { status: 'healthy', message: 'ready' });
+  assert.deepEqual(await wrapped.checkHealth(context), {
+    status: 'healthy',
+    message: 'ready',
+  });
   assert.deepEqual(runtime.timeout, { timeoutMs: 7 });
 
   let factories = 0;
@@ -131,4 +134,14 @@ test('real runtime delegates adapter operations and keeps native notifications l
   assert.equal(factories, 1);
   assert.equal(notifications.length, 1);
   assert.doesNotThrow(() => createLazyNotificationPort());
+});
+
+test('real runtime accepts an injected diagnostic recorder', () => {
+  const recordChat = () => {};
+  const runtime = createRealChatRuntime({
+    provisionStorage: () => paths,
+    recordChat,
+  });
+
+  assert.equal(runtime.recordChat, recordChat);
 });

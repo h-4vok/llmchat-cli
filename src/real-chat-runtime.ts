@@ -4,8 +4,8 @@ import type {
   AdapterDiagnostic,
   TimeoutOptions,
 } from './adapter-contract.js';
-import { ensureBrowserSession, type BrowserSessionPorts } from './browser-session.js';
-import { diagnosticForBrowserSession } from './browser-session-diagnostic.js';
+import type { BrowserSessionPorts } from './browser-session.js';
+import { adapterForProvider, capabilitiesForProvider } from './chat-runtime.js';
 import type { ChatRuntime, StorageProvisioner } from './chat-runtime.js';
 import { createGeminiAdapter } from './gemini-adapter.js';
 import { createPlaywrightGeminiBrowser } from './gemini-playwright-browser.js';
@@ -20,6 +20,10 @@ import {
 } from './persistent-profile-allocation.js';
 import { createProfileLeaseRegistry, type ProfileLeaseRegistry } from './profile-lease-registry.js';
 import { runtimeConfig } from './config/runtime.js';
+import type { StorageOptions } from './secure-storage.js';
+import { persistTranscriptDiagnostic } from './chat-diagnostics.js';
+import { createDemoAdapter } from './demo-adapter.js';
+import { ensureRealChatSession } from './real-chat-session.js';
 
 export type RealRuntimeOptions = {
   provisionStorage?: StorageProvisioner;
@@ -27,38 +31,49 @@ export type RealRuntimeOptions = {
   adapter?: ProviderAdapter;
   profileAllocator?: ProfileAllocator;
   timeout?: TimeoutOptions;
+  recordChat?: ChatRuntime['recordChat'];
+  diagnosticStorage?: StorageOptions;
 };
-
 export function createRealChatRuntime(options: RealRuntimeOptions = {}): ChatRuntime {
   const provision = resolveProvisioner(options);
   const sessions = resolveSessions(options);
   const adapter = resolveAdapter(options, sessions.notifications);
+  const demoAdapter = createDemoAdapter();
   const allocator = options.profileAllocator ?? createPersistentProfileAllocator();
   const profiles = createProfileLeaseRegistry(allocator);
   const diagnostics = new WeakMap<AdapterContext, AdapterDiagnostic>();
+  const recordChat = resolveDiagnosticRecorder(options);
+  const geminiAdapter = withSessionDiagnostic(adapter, diagnostics, profiles);
   return {
-    adapterFor: () => withSessionDiagnostic(adapter, diagnostics, profiles),
+    adapterFor: (provider) => adapterForProvider(provider, geminiAdapter, demoAdapter),
+    capabilitiesFor: capabilitiesForProvider,
     contextFor(provider) {
       return toContext(provision(provider));
     },
     ensureSession(provider, context, options = {}) {
-      const lease = profiles.acquire(context);
-      return ensureBrowserSession(
-        { provider, profileDirectory: lease.profileDirectory, visible: options.visible },
-        sessions,
-        (state) => {
-          diagnostics.set(context, diagnosticForBrowserSession(state, provider));
-        },
-      );
+      return ensureRealChatSession({
+        provider,
+        context,
+        options,
+        ports: sessions,
+        profiles,
+        diagnostics,
+      });
     },
     releaseContext(context) {
       profiles.release(context);
       diagnostics.delete(context);
     },
+    ...(recordChat ? { recordChat } : {}),
     timeout: resolveTimeout(options),
   };
 }
-
+function resolveDiagnosticRecorder(options: RealRuntimeOptions): ChatRuntime['recordChat'] {
+  if (options.recordChat) return options.recordChat;
+  if (options.provisionStorage && !options.diagnosticStorage) return undefined;
+  return (provider, transcript) =>
+    persistTranscriptDiagnostic(provider, transcript, options.diagnosticStorage);
+}
 function withSessionDiagnostic(
   adapter: ProviderAdapter,
   diagnostics: WeakMap<AdapterContext, AdapterDiagnostic>,
@@ -76,21 +91,17 @@ function withSessionDiagnostic(
     checkHealth: (context) => adapter.checkHealth(profiles.context(context)),
   };
 }
-
 function isSessionBlocking(
   diagnostic: AdapterDiagnostic | undefined,
 ): diagnostic is AdapterDiagnostic {
   return diagnostic?.state === 'blocked' || diagnostic?.state === 'session-required';
 }
-
 function resolveProvisioner(options: RealRuntimeOptions): StorageProvisioner {
   return options.provisionStorage ?? ensureProviderStorage;
 }
-
 function resolveSessions(options: RealRuntimeOptions): BrowserSessionPorts {
   return options.sessionPorts ?? defaultSessionPorts();
 }
-
 function resolveAdapter(
   options: RealRuntimeOptions,
   notifications: NativeNotificationPort,
@@ -103,7 +114,6 @@ function resolveAdapter(
     })
   );
 }
-
 function resolveTimeout(options: RealRuntimeOptions): TimeoutOptions {
   return options.timeout ?? { timeoutMs: runtimeConfig.timeouts.chatMs };
 }

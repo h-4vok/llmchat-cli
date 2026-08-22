@@ -123,6 +123,19 @@ test('visible provider errors persist diagnostics and preserve the browser', asy
   );
 });
 
+test('an aborted provider failure closes its conversation', async () => {
+  const { adapter, calls } = fixture({ kind: 'error', message: 'cancelled' });
+  const cancellation = new AbortController();
+  cancellation.abort();
+
+  await assert.rejects(adapter.executeChat({ prompt: 'hello' }, context, cancellation.signal));
+
+  assert.deepEqual(
+    calls.map((call) => call[0]),
+    ['open', 'submit', 'persist', 'close'],
+  );
+});
+
 test('manual health check inspects UI without opening or submitting a conversation', async () => {
   const { adapter, calls } = fixture({ kind: 'response', text: 'unused' });
 

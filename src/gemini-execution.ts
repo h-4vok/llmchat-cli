@@ -92,7 +92,10 @@ class GeminiExecution {
     if (!this.active || version !== this.timerVersion) return;
     this.finish();
     this.cancellation.abort(new DOMException('Gemini became inactive.', 'TimeoutError'));
-    void this.submission.then(() => this.rejectInactive(), () => this.rejectInactive());
+    void this.submission.then(
+      () => this.rejectInactive(),
+      () => this.rejectInactive(),
+    );
   }
 
   private async rejectInactive(): Promise<void> {
@@ -107,7 +110,10 @@ class GeminiExecution {
     if (!this.active) return;
     this.finish();
     this.cancellation.abort(reason);
-    void this.submission.then(() => this.reject(reason), () => this.reject(reason));
+    void this.submission.then(
+      () => this.reject(reason),
+      () => this.reject(reason),
+    );
   }
 
   private complete(response: GeminiPromptResponse): void {

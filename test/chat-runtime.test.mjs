@@ -3,9 +3,9 @@ import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
-import { createChatRuntime } from '../dist/chat-runtime.js';
 import { runCliProcess } from '../dist/cli-app.js';
 import { ensureProviderStorage } from '../dist/secure-storage.js';
+import { createFakeChatRuntime } from '../test-support/fake-chat-runtime.mjs';
 
 const paths = {
   root: '/data/llmchat',
@@ -17,7 +17,7 @@ const paths = {
 
 test('chat context provisions secure storage before exposing its paths', () => {
   const calls = [];
-  const runtime = createChatRuntime((provider) => {
+  const runtime = createFakeChatRuntime((provider) => {
     calls.push(provider);
     return paths;
   });
@@ -30,7 +30,7 @@ test('chat context provisions secure storage before exposing its paths', () => {
 });
 
 test('storage provisioning failures prevent adapter context creation', () => {
-  const runtime = createChatRuntime(() => {
+  const runtime = createFakeChatRuntime(() => {
     throw new Error('secure storage unavailable');
   });
 
@@ -71,7 +71,7 @@ test('CLI provisions context before obtaining or executing the adapter', async (
 
 test('Windows offline chat completes after provisioning local storage', async () => {
   const root = mkdtempSync(join(tmpdir(), 'llmchat-windows-offline-'));
-  const runtime = createChatRuntime((provider) =>
+  const runtime = createFakeChatRuntime((provider) =>
     ensureProviderStorage(provider, {
       input: { platform: 'win32', home: root, env: { LOCALAPPDATA: root } },
       accessControl: { secureDirectory: () => true, secureFile: () => true },
@@ -86,7 +86,5 @@ test('Windows offline chat completes after provisioning local storage', async ()
   );
 
   assert.equal(status, 0);
-  assert.deepEqual(events, [
-    { speaker: 'gemini', message: 'Simulated response from gemini: hola' },
-  ]);
+  assert.deepEqual(events, [{ speaker: 'gemini', message: 'Fake response from gemini: hola' }]);
 });

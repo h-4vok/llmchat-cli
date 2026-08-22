@@ -14,6 +14,7 @@ export type Speaker = {
 
 export const speakers = {
   gemini: { label: 'GEMINI', color: palette.blue },
+  demo: { label: 'DEMO', color: palette.amber },
   chatgpt: { label: 'CHATGPT', color: palette.terracotta },
   llmchat: { label: 'LLMCHAT', color: palette.emerald },
   warning: { label: 'WARNING', color: palette.amber },
@@ -32,6 +33,7 @@ export type OutputEvent = {
 
 export type Output = {
   emit(event: OutputEvent): void;
+  raw?(payload: string): void;
 };
 
 export type OutputOptions = {
@@ -51,6 +53,9 @@ export function createOutput(options: OutputOptions): Output {
     emit(event): void {
       const formattedLines = formatOutputEvent(event, now(), labelWidth);
       formattedLines.forEach(options.write);
+    },
+    raw(payload): void {
+      payload.replace(/\n$/, '').split('\n').forEach(options.write);
     },
   };
 }

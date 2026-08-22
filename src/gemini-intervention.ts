@@ -36,13 +36,17 @@ async function waitUntilResolved(
 ): Promise<void> {
   let intervention: Intervention | undefined = initial;
   while (intervention) {
-    signal?.throwIfAborted();
+    assertNotAborted(signal);
     if (intervention === 'cancelled') throw cancellationError();
     emit({ kind: 'activity', message: `Gemini awaits manual ${intervention} resolution.` });
     await page.wait();
-    signal?.throwIfAborted();
+    assertNotAborted(signal);
     intervention = await observeIntervention(page);
   }
+}
+
+function assertNotAborted(signal: AbortSignal | undefined): void {
+  signal?.throwIfAborted();
 }
 
 function cancellationError(): Error {

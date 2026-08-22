@@ -31,8 +31,11 @@ test('chat supports provider precedence and deterministic output', () => {
   assert.deepEqual(JSON.parse(readFileSync(file, 'utf8')).futureSetting, { enabled: true });
   const saved = run(configHome, 'chat', 'hello');
   assert.match(saved.stdout, /gemini.*hello/i);
+  assert.equal(run(configHome, 'config', 'set-default-provider', 'demo').status, 0);
+  assert.match(run(configHome, 'chat', 'hello').stdout, /demo.*hello/i);
+  assert.match(run(configHome, 'chat', 'hello', '--provider', 'gemini').stdout, /gemini.*hello/i);
   assert.equal(run(configHome, 'chat', 'hello', '--provider', 'openai').status !== 0, true);
-  assert.match(readFileSync(file, 'utf8'), /gemini/);
+  assert.match(readFileSync(file, 'utf8'), /demo/);
 });
 
 test('configuration validation, clearing, and help are predictable', () => {
@@ -49,6 +52,7 @@ test('configuration validation, clearing, and help are predictable', () => {
   assert.equal(configHelp.status, 0);
   assert.match(configHelp.stdout, /set-default-provider/);
   assert.match(configHelp.stdout, /gemini/);
+  assert.match(configHelp.stdout, /demo/);
   assert.match(configHelp.stdout, /Examples:/);
   assert.match(configHelp.stdout, /llmchat config set-default-provider gemini/);
   assert.equal(run(configHome, 'chat', '--help').status, 0);

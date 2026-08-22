@@ -7,7 +7,10 @@ export type ChatArguments = {
   systemInstructions?: string;
   keepBrowserOpen?: boolean;
   disposableConversation?: boolean;
+  output: OutputFormat;
 };
+
+export type OutputFormat = 'text' | 'json' | 'jsonl' | 'yaml';
 
 type ParseState = {
   promptParts: string[];
@@ -17,6 +20,7 @@ type ParseState = {
   systemInstructions?: string;
   keepBrowserOpen?: boolean;
   disposableConversation?: boolean;
+  output?: OutputFormat;
   flag?: string;
 };
 type OptionHandler = (option: string, args: string[], state: ParseState) => ChatArguments;
@@ -27,10 +31,22 @@ const optionHandlers: Record<string, OptionHandler> = {
   '--keep-browser-open': parseKeepBrowserOpen,
   '--disposable-conversation': parseDisposableConversation,
   '--model': parseModel,
+  '--output': parseOutput,
   '--provider': parseProvider,
   '--reasoning': parseReasoning,
   '--system-instructions': parseSystemInstructions,
 };
+
+function parseOutput(_option: string, args: string[], state: ParseState): ChatArguments {
+  const { value, remaining } = optionValue(args, '--output');
+  if (!isOutputFormat(value)) throw new Error(`Unsupported output format "${value}".`);
+  state.output = value;
+  return parseRemaining(remaining, state);
+}
+
+function isOutputFormat(value: string): value is OutputFormat {
+  return ['text', 'json', 'jsonl', 'yaml'].includes(value);
+}
 
 function parseModel(_option: string, args: string[], state: ParseState): ChatArguments {
   const { value, remaining } = optionValue(args, '--model');
@@ -65,9 +81,13 @@ export function parseChat(args: string[]): ChatArguments {
 function parseRemaining(args: string[], state: ParseState): ChatArguments {
   const [argument, ...remaining] = args;
   if (argument === undefined) return parsedArguments(state);
-  if (isHelp(argument)) return { help: true };
+  if (isHelp(argument)) return helpArguments(state);
   if (!argument.startsWith('--')) return parsePromptPart(argument, remaining, state);
   return parseOption(argument, remaining, state);
+}
+
+function helpArguments(state: ParseState): ChatArguments {
+  return { help: true, output: outputOrDefault(state.output) };
 }
 
 function isHelp(argument: string): boolean {
@@ -114,12 +134,21 @@ function parsedArguments(state: ParseState): ChatArguments {
   const parsed = {
     help: false,
     model: state.model,
-    prompt: state.promptParts.join(' ').trim() || undefined,
+    prompt: parsedPrompt(state.promptParts),
     provider: state.provider,
     systemInstructions: state.systemInstructions,
     keepBrowserOpen: state.keepBrowserOpen ?? false,
     disposableConversation: Boolean(state.disposableConversation),
+    output: outputOrDefault(state.output),
   } as ChatArguments;
   if (state.reasoning !== undefined) parsed.reasoning = state.reasoning;
   return parsed;
+}
+
+function parsedPrompt(parts: string[]): string | undefined {
+  return parts.join(' ').trim() || undefined;
+}
+
+function outputOrDefault(output: OutputFormat | undefined): OutputFormat {
+  return output ?? 'text';
 }

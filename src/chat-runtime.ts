@@ -5,10 +5,7 @@ import {
 } from './adapter-contract.js';
 import type { ProviderStoragePaths } from './data-path.js';
 import type { BrowserSessionResult } from './browser-session.js';
-import { sendChat } from './provider.js';
-import { ensureProviderStorage } from './secure-storage.js';
-import { runtimeConfig } from './config/runtime.js';
-import { DisposableConversationUnsupportedError } from './adapter-contract.js';
+import type { ExecutionTranscript } from './execution-transcript.js';
 
 export type ChatRuntime = {
   adapterFor(provider: string): ProviderAdapter;
@@ -16,51 +13,30 @@ export type ChatRuntime = {
   ensureSession?(
     provider: string,
     context: AdapterContext,
-    options?: { visible?: boolean },
+    options?: { visible?: boolean; interactive?: boolean },
   ): Promise<BrowserSessionResult>;
   releaseContext?(context: AdapterContext): void | Promise<void>;
+  recordChat?(provider: string, transcript: ExecutionTranscript): void | Promise<void>;
+  capabilitiesFor?(provider: string): ProviderCapabilities;
   timeout: TimeoutOptions;
+};
+
+export type ProviderCapabilities = {
+  authentication: 'interactive' | 'none';
+  browserSession: boolean;
 };
 
 export type StorageProvisioner = (provider: string) => ProviderStoragePaths;
 
-const simulationAdapter: ProviderAdapter = {
-  provider: 'gemini',
-  async executeChat(request) {
-    if (request.disposableConversation)
-      throw new DisposableConversationUnsupportedError(this.provider);
-    return { text: sendChat(this.provider, request) };
-  },
-  async diagnose() {
-    return { state: 'progress', message: 'simulation is ready' };
-  },
-  async checkHealth() {
-    return { status: 'healthy', message: 'simulation is ready' };
-  },
-};
-
-export function createChatRuntime(
-  provisionStorage: StorageProvisioner = ensureProviderStorage,
-): ChatRuntime {
-  return {
-    adapterFor: () => simulationAdapter,
-    async ensureSession() {
-      return { status: 'ready', source: 'reused' };
-    },
-    contextFor(provider) {
-      const paths = provisionStorage(provider);
-      return {
-        profileDirectory: paths.profileDirectory,
-        diagnosticsDirectory: paths.diagnosticsDirectory,
-        screenshotsDirectory: paths.screenshotsDirectory ?? '',
-        configuration: {},
-        notify: ignoreNotification,
-      };
-    },
-    timeout: { timeoutMs: runtimeConfig.timeouts.geminiInactivityMs },
-  };
+export function adapterForProvider(
+  provider: string,
+  gemini: ProviderAdapter,
+  demo: ProviderAdapter,
+): ProviderAdapter {
+  return provider === 'demo' ? demo : gemini;
 }
 
-export const defaultChatRuntime = createChatRuntime();
-
-function ignoreNotification(): void {}
+export function capabilitiesForProvider(provider: string): ProviderCapabilities {
+  if (provider === 'demo') return { authentication: 'none', browserSession: false };
+  return { authentication: 'interactive', browserSession: true };
+}

@@ -24,6 +24,8 @@
     "test:unit": "node --test \"test/*.test.mjs\"",
     "test:compiled": "node --test",
     "test": "npm run build && npm run test:unit",
+    "test:mcp": "npm run build && node --test \"test/mcp-*.test.mjs\"",
+    "test:mcp:codex": "npm run build && node --test \"test/live/mcp-codex.test.mjs\"",
     "test:integration": "npm run build && node --test \"test/integration/*.test.mjs\"",
     "lint": "eslint \"src/**/*.ts\" \"test/**/*.mjs\" \"test-support/**/*.mjs\"",
     "coverage": "npm run build && c8 --all --extension .ts --include \"src/**/*.ts\" --exclude-after-remap --check-coverage --lines 100 --functions 100 --branches 100 npm run test:unit",
@@ -36,7 +38,10 @@
     "format:check": "prettier --check ."
   },
   "dependencies": {
-    "playwright": "^1.55.0"
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "playwright": "^1.55.0",
+    "yaml": "^2.9.0",
+    "zod": "^3.25.76"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

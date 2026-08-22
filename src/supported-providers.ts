@@ -1,3 +1,3 @@
-export const supportedProviders = ['gemini'] as const;
+export const supportedProviders = ['gemini', 'demo'] as const;
 export type Provider = (typeof supportedProviders)[number];
-export const defaultProvider = supportedProviders[0];
+export const defaultProvider: Provider = 'gemini';

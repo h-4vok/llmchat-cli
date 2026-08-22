@@ -34,17 +34,52 @@ npm run uninstall:global
 ```text
 llmchat config set-default-provider gemini
 llmchat auth gemini
+llmchat chat "hola que tal" --provider demo
 llmchat chat "Explain what an API is in one sentence"
 llmchat chat "Explain what an API is" --provider gemini --model "Gemini 2.5 Pro"
+llmchat chat "Explain what an API is" --output json
 llmchat health gemini
 llmchat config clear-default-provider
 ```
+
+`chat` defaults to the existing human-readable `text` output. Use `--output json`,
+`--output jsonl`, or `--output yaml` for a versioned (`schemaVersion: 1`)
+structured contract. JSON and YAML emit one terminal document. JSONL emits
+ordered activity records followed by exactly one terminal result record. A
+structured failure uses the provider-neutral `CHAT_FAILED` code and exits
+non-zero.
+
+Gemini remains the factory default. `demo` is a deterministic local provider
+for integrations, examples, and manual smoke tests: it never opens a browser,
+uses credentials, creates a provider session, or makes a network request. It
+answers `Demo response: <prompt>` and can be selected explicitly or configured
+as the default with `llmchat config set-default-provider demo`. It accepts the
+shared chat options without interpreting them; `--keep-browser-open` is rejected
+because no browser exists.
+
+Start the local MCP server over stdio with:
+
+```text
+llmchat mcp
+```
+
+The MCP surface has one tool: `ask_llm`. It is described so clients can discover
+it for requests such as “use LLMChat”, “ask Gemini”, “delegate to Gemini”, or
+“get a second opinion”. `prompt` is required; `provider`, `model`, and `reasoning`
+are optional. The conversation is disposable by default and can be retained by
+sending `disposableConversation: false`. Results include both compatible text
+content and a versioned structured transcript.
+
+Authentication, health, and configuration remain CLI responsibilities. If an
+MCP request needs authentication, its error tells the caller which `llmchat auth`
+command to run locally; the MCP never opens a login browser. The MCP does not
+expose output formatting, browser lifetime, or system-instruction options.
 
 Use `llmchat --help` and `llmchat config --help` for command usage. Gemini reasoning values are `Standard` and `Extended thinking`; unknown provider-specific values produce a warning and do not stop the chat.
 
 ## Alpha limitations and manual checks
 
-The supported provider is currently Gemini. Its selectors, model controls, login state, and response behaviour depend on a volatile web UI. Compatibility can change without a code release. Real Gemini checks are manual, non-deterministic, and outside CI:
+The browser-backed provider is currently Gemini. Its selectors, model controls, login state, and response behaviour depend on a volatile web UI. Compatibility can change without a code release. Real Gemini checks are manual, non-deterministic, and outside CI:
 
 ```text
 npm run install:global
@@ -65,7 +100,7 @@ LLM Chat data is separate from normal browser profiles:
 - macOS: `~/Library/Application Support/llmchat`
 - Linux: `$XDG_DATA_HOME/llmchat`, falling back to `~/.local/share/llmchat`
 
-Each provider has isolated `profiles`, `logs`, `diagnostics`, and `screenshots` directories. They persist until manually deleted. Diagnostics and screenshots can contain prompts, responses, or visible provider content. Screenshots are limited to the provider page viewport; they must not contain DevTools, browser internals, storage state, or authentication dialogs.
+Each provider has isolated `profiles`, `logs`, `diagnostics`, and `screenshots` directories. They persist until manually deleted; there is no automatic retention or deletion. Every chat invocation appends a local diagnostic record containing its prompt and, when available, its response. These files may therefore contain sensitive prompts and provider responses. Screenshots can also contain visible provider content and are limited to the provider page viewport; they must not contain DevTools, browser internals, storage state, or authentication dialogs.
 
 To remove local data, stop any `llmchat` process and delete the `llmchat` directory under the platform path above. The application does not provide automatic cleanup. Local overrides under `.llmchat-data/`, profiles, logs, diagnostics, screenshots, build output, coverage, and reports are ignored by Git.
 
@@ -76,9 +111,27 @@ Textual diagnostics use redaction for common cookies, credentials, tokens, API k
 ```text
 npm install
 npm run check
+npm run test:mcp
 ```
 
-Tests and CI are offline and deterministic. They never use provider credentials, real browser profiles, or live provider UI. `npm run mutation` is an optional non-blocking diagnostic. See `AGENTS.md` for the engineering rules and `CONTRIBUTING.md` for the contribution workflow.
+`npm run test:mcp` runs the reusable MCP suite. It is offline, deterministic,
+and remains part of the normal unit tests, coverage, `npm run check`, and CI.
+
+Run `npm run test:mcp:codex` for the opt-in live integration. It requires an
+installed, authenticated Codex CLI plus network access and quota. The harness
+starts the current local build as an isolated required MCP server, invokes only
+the offline `demo` provider, and verifies Codex's JSONL `mcp_tool_call` events.
+It does not use the globally installed `llmchat` or the user's LLMChat data.
+Because it consumes a live Codex service, it is intentionally outside
+`npm run check` and CI and fails with diagnostics instead of silently skipping.
+On Windows the harness resolves the npm `codex.cmd` shim to its JavaScript
+entrypoint and launches it without a shell. Set `CODEX_BIN` to an explicit
+Codex `.exe`, `.js`, or npm `.cmd` path when automatic resolution is unsuitable.
+
+Tests and CI never use provider credentials, real browser profiles, or live
+provider UI. `npm run mutation` is an optional non-blocking diagnostic. See
+`AGENTS.md` for the engineering rules and `CONTRIBUTING.md` for the contribution
+workflow.
 
 The canonical code-quality and review criteria are in [`docs/code-quality.md`](docs/code-quality.md).
 

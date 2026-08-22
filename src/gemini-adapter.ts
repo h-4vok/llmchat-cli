@@ -37,24 +37,18 @@ export function createGeminiAdapter(options: GeminiAdapterOptions): ProviderAdap
     async executeChat(request, context, signal = new AbortController().signal) {
       const conversation = await options.browser.open(context);
       try {
-        const response = await runConversation(
-          conversation,
-          request,
+        const response = await runConversation(conversation, request, {
           context,
-          options.inactivityMs,
+          inactivityMs: options.inactivityMs,
           signal,
-        );
-        if (!request.keepBrowserOpen) await conversation.close();
+        });
+        const result = await completeConversation(conversation, request, response);
         diagnostic = { state: 'progress', message: 'Gemini response completed.' };
-        return {
-          text: response.text,
-          ...(request.keepBrowserOpen ? { waitForClose: () => conversation.waitForClose() } : {}),
-        };
+        return result;
       } catch (failure) {
         const error = asError(failure);
         diagnostic = { state: 'error', message: redactDiagnosticText(error.message) };
-        await conversation.persistFailure(error);
-        if (signal.aborted || error instanceof GeminiInactivityError) await conversation.close();
+        await handleFailure(conversation, error, signal);
         throw error;
       }
     },
@@ -65,12 +59,39 @@ export function createGeminiAdapter(options: GeminiAdapterOptions): ProviderAdap
   };
 }
 
+async function completeConversation(
+  conversation: GeminiConversation,
+  request: ChatRequest,
+  response: ChatResponse,
+): Promise<ChatResponse> {
+  if (!request.keepBrowserOpen) await conversation.close();
+  const waitForClose = request.keepBrowserOpen ? () => conversation.waitForClose() : undefined;
+  return { text: response.text, ...(waitForClose ? { waitForClose } : {}) };
+}
+
+async function handleFailure(
+  conversation: GeminiConversation,
+  error: Error,
+  signal: AbortSignal,
+): Promise<void> {
+  await conversation.persistFailure(error);
+  if (shouldCloseAfterFailure(error, signal)) await conversation.close();
+}
+
+function shouldCloseAfterFailure(error: Error, signal: AbortSignal): boolean {
+  return signal.aborted || error instanceof GeminiInactivityError;
+}
+
+type ConversationRunOptions = {
+  context: AdapterContext;
+  inactivityMs: number;
+  signal: AbortSignal;
+};
+
 async function runConversation(
   conversation: GeminiConversation,
   request: ChatRequest,
-  context: AdapterContext,
-  inactivityMs: number,
-  signal: AbortSignal,
+  options: ConversationRunOptions,
 ): Promise<ChatResponse> {
   const prompt: GeminiPromptRequest = {
     prompt: request.prompt,
@@ -80,10 +101,10 @@ async function runConversation(
   if (request.disposableConversation !== undefined)
     prompt.disposableConversation = request.disposableConversation;
   return executeGeminiPrompt(conversation, prompt, {
-    inactivityMs,
-    signal,
+    inactivityMs: options.inactivityMs,
+    signal: options.signal,
     onActivity: ({ message }) =>
-      context.notify({ kind: 'progress', message: redactDiagnosticText(message) }),
+      options.context.notify({ kind: 'progress', message: redactDiagnosticText(message) }),
   });
 }
 
