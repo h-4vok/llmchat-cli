@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { createChatRuntime } from '../dist/chat-runtime.js';
 import { runCliProcess } from '../dist/cli-app.js';
+import { createFakeChatRuntime } from '../test-support/fake-chat-runtime.mjs';
 
 const context = {
   profileDirectory: 'profiles/gemini',
@@ -135,8 +135,8 @@ test('CLI output redacts credential, session, secret, and id token assignments',
   );
 });
 
-test('the default offline adapter exposes normalized health, diagnosis, and neutral context', async () => {
-  const runtime = createChatRuntime(() => ({
+test('the fake adapter exposes normalized health, diagnosis, and neutral context', async () => {
+  const runtime = createFakeChatRuntime(() => ({
     profileDirectory: 'profiles/gemini',
     diagnosticsDirectory: 'diagnostics/gemini',
   }));
@@ -145,11 +145,11 @@ test('the default offline adapter exposes normalized health, diagnosis, and neut
 
   assert.deepEqual(await adapter.diagnose(adapterContext), {
     state: 'progress',
-    message: 'simulation is ready',
+    message: 'Fake provider is ready.',
   });
   assert.deepEqual(await adapter.checkHealth(adapterContext), {
     status: 'healthy',
-    message: 'simulation is ready',
+    message: 'Fake provider is ready.',
   });
   assert.doesNotThrow(() => adapterContext.notify({ kind: 'progress', message: 'ignored' }));
   assert.match(adapterContext.profileDirectory, /profiles.+gemini/);

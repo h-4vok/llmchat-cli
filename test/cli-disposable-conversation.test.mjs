@@ -1,8 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { runCliProcess } from '../dist/cli-app.js';
-import { DisposableConversationUnsupportedError } from '../dist/adapter-contract.js';
-import { createChatRuntime } from '../dist/chat-runtime.js';
 import { printRootHelp } from '../dist/cli-help.js';
 
 test('chat forwards disposable-conversation to the selected adapter', async () => {
@@ -43,14 +41,6 @@ test('help documents disposable conversations and disabled mode remains false', 
   const events = [];
   printRootHelp({ emit: (event) => events.push(event) });
   assert.match(events[0].message, /--disposable-conversation/);
-});
-
-test('simulation provider rejects unsupported disposable conversations distinctly', async () => {
-  const runtime = createChatRuntime(() => ({ profileDirectory: '', diagnosticsDirectory: '' }));
-  await assert.rejects(
-    runtime.adapterFor('gemini').executeChat({ prompt: 'hello', disposableConversation: true }),
-    (error) => error instanceof DisposableConversationUnsupportedError,
-  );
 });
 
 test('keep-browser-open remains independent from disposable conversation', async () => {

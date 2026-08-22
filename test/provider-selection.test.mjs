@@ -29,6 +29,10 @@ test('resolveProvider prefers explicit provider and validates once', () => {
 
 test('resolveProvider uses configured provider and defaults when absent', () => {
   assert.equal(
+    withConfig('demo', () => resolveProvider(undefined)),
+    'demo',
+  );
+  assert.equal(
     withConfig('gemini', () => resolveProvider(undefined)),
     'gemini',
   );
@@ -44,5 +48,6 @@ test('resolveProvider uses configured provider and defaults when absent', () => 
 
 test('isValidProvider answers validity without throwing', () => {
   assert.equal(isValidProvider('gemini'), true);
+  assert.equal(isValidProvider('demo'), true);
   assert.equal(isValidProvider('unsupported'), false);
 });

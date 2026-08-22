@@ -51,6 +51,13 @@ test('output uses its closed speaker registry', () => {
   assert.ok(lines[0].startsWith(palette.blue));
 });
 
+test('raw output writes structured payload lines without visual decoration', () => {
+  const lines = [];
+  const output = createOutput({ write: (line) => lines.push(line) });
+  output.raw('{"one":1}\n{"two":2}\n');
+  assert.deepEqual(lines, ['{"one":1}', '{"two":2}']);
+});
+
 test('CLI success and failure share stdout with exit codes 0 and 1', () => {
   const home = mkdtempSync(join(tmpdir(), 'llmchat-output-'));
   const success = run(home, 'chat', '--provider', 'gemini', 'hello');

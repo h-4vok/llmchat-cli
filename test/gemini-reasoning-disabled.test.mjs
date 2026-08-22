@@ -29,3 +29,17 @@ test('reasoning disabled after menu load is rejected before its active state is 
   );
   assert.match(signals[0].message, /reasoning option is unavailable/);
 });
+
+test('reasoning selection honors an already-aborted caller signal', async () => {
+  const cancellation = new AbortController();
+  cancellation.abort(new Error('caller cancelled'));
+  const page = {
+    element: () => ({ visible: async () => false, enabled: async () => false }),
+    wait: async () => {},
+  };
+
+  await assert.rejects(
+    selectReasoningMode(page, 'Extended thinking', '3.6 Flash', () => {}, cancellation.signal),
+    /caller cancelled/,
+  );
+});

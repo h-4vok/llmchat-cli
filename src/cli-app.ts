@@ -1,6 +1,4 @@
-import { defaultChatRuntime, type ChatRuntime } from './chat-runtime.js';
-import { executeChat } from './chat-command.js';
-import { parseChat } from './cli-args.js';
+import type { ChatRuntime } from './chat-runtime.js';
 import { printConfigHelp, printRootHelp } from './cli-help.js';
 import { removeDefaultProvider, saveDefaultProvider } from './config.js';
 import { errorMessage } from './error-format.js';
@@ -11,41 +9,51 @@ import { withRuntimeContext } from './runtime-context.js';
 import { messages } from './config/messages.js';
 import { runtimeConfig } from './config/runtime.js';
 import type { BrowserSessionResult } from './browser-session.js';
+import { startMcpServer } from './mcp-command.js';
+import { runChatCommand } from './cli-chat.js';
 
 type CommandHandler = (
   args: string[],
   output: Output,
   runtime: ChatRuntime,
-) => void | Promise<void>;
+) => void | 0 | 1 | Promise<void | 0 | 1>;
 type ConfigHandler = (args: string[]) => void;
 
 const commandHandlers: Record<string, CommandHandler> = {
   auth: runAuth,
-  chat: runChat,
+  chat: runChatCommand,
   config: runConfig,
   health: runHealth,
+  mcp: runMcp,
 };
 
-export async function runCli(
-  args: string[],
-  output: Output,
-  runtime: ChatRuntime = defaultChatRuntime,
-): Promise<void> {
+async function runMcp(args: string[], _output: Output, runtime: ChatRuntime): Promise<void> {
+  if (args.length) throw new Error('Usage: llmchat mcp.');
+  await startMcpServer(runtime);
+}
+
+export async function runCli(args: string[], output: Output, runtime: ChatRuntime): Promise<0 | 1> {
   const [command, ...commandArgs] = args;
-  if (isRootHelp(command)) return void printRootHelp(output);
+  if (isRootHelp(command)) {
+    printRootHelp(output);
+    return 0;
+  }
   const handler = commandHandlers[command];
   if (!handler) throw new Error(`Unknown command "${command}". Use "llmchat --help" for usage.`);
-  await handler(commandArgs, output, runtime);
+  return commandStatus(await handler(commandArgs, output, runtime));
+}
+
+function commandStatus(result: void | 0 | 1): 0 | 1 {
+  return result ?? 0;
 }
 
 export async function runCliProcess(
   args: string[],
   output: Output,
-  runtime: ChatRuntime = defaultChatRuntime,
+  runtime: ChatRuntime,
 ): Promise<0 | 1> {
   try {
-    await runCli(args, output, runtime);
-    return runtimeConfig.exitCode.success;
+    return await runCli(args, output, runtime);
   } catch (error) {
     output.emit({
       speaker: 'llmchat',
@@ -88,37 +96,16 @@ function clearDefaultProvider(args: string[]): void {
   removeDefaultProvider();
 }
 
-async function runChat(args: string[], output: Output, runtime: ChatRuntime): Promise<void> {
-  const parsed = parseChat(args);
-  if (parsed.help) return printRootHelp(output);
-  if (!parsed.prompt) throw new Error('A prompt is required.');
-  const provider = resolveProvider(parsed.provider);
-  const request = chatRequest(parsed);
-  await withRuntimeContext(runtime, provider, async (context) => {
-    await executeChat({
-      runtime,
-      provider,
-      context,
-      request,
-      keepBrowserOpen: Boolean(parsed.keepBrowserOpen),
-      output,
-    });
-  });
-}
-function chatRequest(parsed: ReturnType<typeof parseChat>) {
-  return {
-    model: parsed.model,
-    prompt: parsed.prompt as string,
-    systemInstructions: parsed.systemInstructions,
-    ...(parsed.reasoning === undefined ? {} : { reasoning: parsed.reasoning }),
-    keepBrowserOpen: parsed.keepBrowserOpen,
-    disposableConversation: parsed.disposableConversation,
-  };
-}
-
 async function runAuth(args: string[], output: Output, runtime: ChatRuntime): Promise<void> {
   if (args.length !== 1) throw new Error('Usage: llmchat auth <provider>.');
   const provider = resolveProvider(args[0]);
+  if (runtime.capabilitiesFor?.(provider).authentication === 'none') {
+    output.emit({
+      speaker: 'llmchat',
+      message: `Provider ${provider} does not require authentication.`,
+    });
+    return;
+  }
   await withRuntimeContext(runtime, provider, async (context) => {
     const session = requireSession(runtime, provider, context, { visible: true });
     const result = session ? await session : undefined;

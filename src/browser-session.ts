@@ -10,10 +10,7 @@ export type BrowserSessionRequest = {
   profileDirectory: string;
   visible?: boolean;
 };
-
-export type LoginBrowserRequest = BrowserSessionRequest & {
-  visible: true;
-};
+export type LoginBrowserRequest = BrowserSessionRequest & { visible: true };
 
 export interface LoginBrowser {
   observeSession(): AsyncIterable<LoginObservation>;
@@ -44,16 +41,15 @@ export type BrowserSessionEvent =
 
 export type BrowserSessionResult =
   | { status: 'ready'; source: 'reused' | 'authenticated' }
+  | { status: 'authentication-required' }
   | { status: 'cancelled' }
   | { status: 'indeterminate' };
 
 export type BrowserSessionObserver = (state: BrowserSessionState) => void;
-
 const sessionStates = {
   'session-reused': { status: 'ready', source: 'reused' },
   'session-required': { status: 'attention-required', reason: 'login' },
 } as const;
-
 const loginStates = {
   'login-required': { status: 'attention-required', reason: 'login' },
   captcha: { status: 'attention-required', reason: 'captcha' },
@@ -62,7 +58,6 @@ const loginStates = {
   usable: { status: 'ready', source: 'authenticated' },
   cancelled: { status: 'cancelled' },
 } as const;
-
 export function transitionBrowserSession(
   _state: BrowserSessionState,
   event: BrowserSessionEvent,
@@ -70,7 +65,6 @@ export function transitionBrowserSession(
   if (event.type === 'login-observed') return loginStates[event.observation];
   return sessionStates[event.type];
 }
-
 export async function ensureBrowserSession(
   request: BrowserSessionRequest,
   ports: BrowserSessionPorts,
@@ -94,7 +88,6 @@ export async function ensureBrowserSession(
     await login.close();
   }
 }
-
 async function ensureVisibleBrowserSession(
   request: BrowserSessionRequest,
   ports: BrowserSessionPorts,

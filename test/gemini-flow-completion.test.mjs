@@ -68,3 +68,34 @@ test('a valid response is accepted when Gemini changes the selected model', asyn
   assert.deepEqual(await execution, { text: 'hello back', model: 'gemini-flash' });
   assert.equal(session.submissions.length, 1);
 });
+
+for (const outcome of ['resolve', 'reject']) {
+  test(`external cancellation waits for submission to ${outcome}`, async () => {
+    let settle;
+    const cancellation = new AbortController();
+    const port = {
+      submit() {
+        return new Promise((resolve, reject) => {
+          settle = outcome === 'resolve' ? resolve : reject;
+        });
+      },
+      async diagnoseLocally() {
+        return { state: 'unknown', message: 'unused' };
+      },
+    };
+    const execution = executeGeminiPrompt(
+      port,
+      { prompt: 'hello' },
+      {
+        ...dormantTimeout,
+        signal: cancellation.signal,
+      },
+    );
+    const reason = new Error('cancelled externally');
+
+    cancellation.abort(reason);
+    settle(new Error('submission settled'));
+
+    await assert.rejects(execution, reason);
+  });
+}
