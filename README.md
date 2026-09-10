@@ -129,9 +129,8 @@ entrypoint and launches it without a shell. Set `CODEX_BIN` to an explicit
 Codex `.exe`, `.js`, or npm `.cmd` path when automatic resolution is unsuitable.
 
 Tests and CI never use provider credentials, real browser profiles, or live
-provider UI. `npm run mutation` is an optional non-blocking diagnostic. See
-`AGENTS.md` for the engineering rules and `CONTRIBUTING.md` for the contribution
-workflow.
+provider UI. See `AGENTS.md` for the engineering rules and `CONTRIBUTING.md`
+for the contribution workflow.
 
 The canonical code-quality and review criteria are in [`docs/code-quality.md`](docs/code-quality.md).
 
