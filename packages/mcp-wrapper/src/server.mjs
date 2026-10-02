@@ -3,50 +3,64 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import * as z from 'zod/v4';
 import { createProcessClient } from './process-client.mjs';
 
-const provider = z.string().optional();
-const common = { provider: provider.describe('Provider name.') };
+import { instructions, provider, chatInput, mcpResult, failure } from './tool-contract.mjs';
 
 export function createWrapperServer(client = createProcessClient()) {
-  const server = new McpServer({ name: 'llmchat-mcp-wrapper', version: '1.0.0' });
-  const invoke = (args, extra) =>
-    client.run(args, { signal: extra.signal }).then(result).catch(failure);
+  const server = new McpServer({ name: 'llmchat-mcp-wrapper', version: '1.0.0' }, { instructions });
+  const invoke = (args, extra, format) =>
+    client
+      .run(args, { signal: extra.signal })
+      .then((record) => mcpResult(record, format))
+      .catch((error) => failure(error, format));
   server.registerTool(
     'chat',
     {
-      title: 'Chat',
-      inputSchema: {
-        prompt: z.string().min(1),
-        ...common,
-        model: z.string().optional(),
-        reasoning: z.string().optional(),
-        systemInstructions: z.string().optional(),
-        disposableConversation: z.boolean().optional(),
-        outputFormat: z.enum(['text', 'json', 'jsonl', 'yaml']).optional(),
+      title: 'Consult an external LLM',
+      description:
+        'Ask Gemini through LLMChat when the user requests Gemini analysis, a second opinion, or GitHub issue refinement. Send the actual context in prompt. Returns the provider response for Codex to use in the requested workflow. Supports gemini and offline demo; authentication must already exist.',
+      inputSchema: chatInput,
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: false,
+        idempotentHint: false,
+        openWorldHint: true,
       },
     },
-    async (input, extra) => invoke(chatArgs(input), extra),
+    async (input, extra) => invoke(chatArgs(input), extra, input.outputFormat),
   );
   server.registerTool(
     'health',
-    { title: 'Health', inputSchema: { provider: z.string() } },
+    {
+      title: 'Health',
+      description:
+        'Check provider availability without sending a prompt. Gemini checks its browser UI; demo is offline.',
+      inputSchema: { provider },
+    },
     async (input, extra) => invoke(adminArgs('health', input), extra),
   );
   server.registerTool(
     'auth',
-    { title: 'Auth', inputSchema: { provider: z.string() } },
+    {
+      title: 'Auth',
+      description:
+        'Check an existing provider session without opening an interactive login. If authentication is needed, run llmchat auth gemini manually in a local terminal.',
+      inputSchema: { provider },
+    },
     async (input, extra) => invoke(adminArgs('auth', input), extra),
   );
   server.registerTool(
     'config',
     {
       title: 'Config',
+      description:
+        'Read CLI configuration or explicitly change or clear the default provider. Changing configuration affects later calls that omit provider.',
       inputSchema: {
         action: z.enum(['read', 'set-default-provider', 'clear-default-provider']),
-        provider: z.string().optional(),
+        provider: provider.optional(),
       },
     },
     async (input, extra) => {
-      if (input.action !== 'read' && !input.provider)
+      if (input.action === 'set-default-provider' && !input.provider)
         return failure(new Error('config provider is required for this action.'));
       return invoke(configArgs(input), extra);
     },
@@ -59,7 +73,7 @@ export async function startWrapper() {
   await server.connect(new StdioServerTransport());
 }
 function chatArgs(input) {
-  return ['chat', input.prompt, ...flags(input)];
+  return ['chat', ...flags(input), '--', input.prompt];
 }
 function flags(input) {
   return Object.entries({
@@ -80,25 +94,4 @@ function configArgs(input) {
   if (input.action === 'clear-default-provider')
     return ['config', input.action, '--output', 'jsonl'];
   return ['config', input.action, input.provider, '--output', 'jsonl'];
-}
-function result(record) {
-  const text = record.response?.text ?? record.error?.message ?? JSON.stringify(record);
-  return {
-    content: [{ type: 'text', text }],
-    structuredContent: record,
-    ...(record.status === 'failure' ? { isError: true } : {}),
-  };
-}
-function failure(error) {
-  const record = {
-    schemaVersion: 1,
-    type: 'result',
-    status: 'failure',
-    error: { code: 'CHAT_FAILED', message: error.message },
-  };
-  return {
-    content: [{ type: 'text', text: error.message }],
-    structuredContent: record,
-    isError: true,
-  };
 }

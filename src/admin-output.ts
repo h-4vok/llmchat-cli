@@ -1,5 +1,6 @@
 import type { OutputFormat } from './cli-args.js';
 import type { Output } from './output.js';
+import { writeCliRecord } from './cli-process-output.js';
 
 export type AdminOutput = {
   schemaVersion: 1;
@@ -16,8 +17,6 @@ export function emitAdmin(
   data: Record<string, unknown>,
   format: OutputFormat,
 ): void {
-  if (format === 'text') return;
-  if (!output.raw) throw new Error('Structured output requires a raw output writer.');
   const record: AdminOutput = {
     schemaVersion: 1,
     type: 'result',
@@ -25,7 +24,7 @@ export function emitAdmin(
     status: 'success',
     data,
   };
-  output.raw(`${JSON.stringify(record)}\n`);
+  writeCliRecord(output, record, format);
 }
 
 export function adminFormat(args: string[]): { args: string[]; format: OutputFormat } {

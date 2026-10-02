@@ -7,6 +7,7 @@ import { runtimeConfig } from './config/runtime.js';
 import { startMcpServer } from './mcp-command.js';
 import { runChatCommand } from './cli-chat.js';
 import { runAuth, runConfig, runHealth } from './admin-commands.js';
+import { commandOutput, emitCliFailure } from './cli-process-output.js';
 
 type CommandHandler = (
   args: string[],
@@ -48,13 +49,9 @@ export async function runCliProcess(
   runtime: ChatRuntime,
 ): Promise<0 | 1> {
   try {
-    return await runCli(args, output, runtime);
+    return await runCli(args, commandOutput(args, output), runtime);
   } catch (error) {
-    output.emit({
-      speaker: 'llmchat',
-      tone: 'error',
-      message: redactSessionSecrets(errorMessage(error)),
-    });
+    emitCliFailure(args, output, redactSessionSecrets(errorMessage(error)));
     return runtimeConfig.exitCode.failure;
   }
 }

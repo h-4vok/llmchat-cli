@@ -43,7 +43,7 @@ async function probeSession(
   const browser = await launcher.open(request);
   let preserve = false;
   try {
-    const result = await probeObservation(browser);
+    const result = await probeObservation(browser, request.visible);
     preserve = result.preserve;
     return result.availability;
   } finally {
@@ -53,11 +53,12 @@ async function probeSession(
 
 async function probeObservation(
   browser: PersistentBrowserWindow,
+  visible: boolean,
 ): Promise<{ availability: SessionAvailability; preserve: boolean }> {
   const observation = await observeSession(browser);
   if (observation === 'unknown') {
     await browser.persistFailure(unknownUiError());
-    return { availability: 'indeterminate', preserve: true };
+    return { availability: 'indeterminate', preserve: visible };
   }
   return { availability: observation === 'usable' ? 'usable' : 'missing', preserve: false };
 }

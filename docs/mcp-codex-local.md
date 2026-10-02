@@ -31,6 +31,7 @@ En la configuración de MCP de Codex agregá un servidor local `stdio`:
 - Command: `llmchat-mcp-wrapper`
 - Arguments: ninguno
 - Working directory: dejar vacío
+- Tool timeout: 330 segundos (`tool_timeout_sec = 330` en TOML).
 
 Antes de abrir Codex, ejecutá desde el checkout:
 
@@ -60,21 +61,50 @@ RESULT=...Demo response: decí exactamente MCP ok...
 
 Recargá los servidores MCP en Codex. Debe anunciar estos tools: `chat`, `health`, `auth` y `config`.
 
-Probalo con: `Usá el MCP llmchat-local y llamá a chat con provider demo y prompt "decí exactamente MCP ok".`
+Probalo con: `Consultá al provider demo y preguntale "decí exactamente MCP ok".`
 
 La respuesta esperada contiene `Demo response: decí exactamente MCP ok`.
 
 ## Qué ocurre durante una llamada
 
-Para `chat`, el wrapper ejecuta algo equivalente a `llmchat chat "el prompt" --provider demo --output jsonl`. Lee stdout como JSONL versionado, conserva stderr para diagnósticos y devuelve el resultado como MCP. Los cuatro tools usan el mismo boundary.
+Para `chat`, el wrapper ejecuta algo equivalente a `llmchat chat --provider demo --output jsonl -- "el prompt"`. Lee stdout como JSONL versionado, conserva stderr para diagnósticos y devuelve el resultado como MCP. Los cuatro tools usan el mismo boundary.
 
-El wrapper no importa Playwright ni Gemini, no mantiene un daemon `llmchat`, no comparte sesiones y no abre autenticación automáticamente desde MCP.
+La invocación real coloca las opciones primero y el prompt después de `--`,
+para que un texto como `--help` siga siendo una consulta. El límite externo del
+wrapper es de 300 segundos, para permitir los 180 segundos de ejecución del CLI
+más la preparación y el cierre de la sesión. Configurá el host con un límite
+mayor para que no interrumpa antes al wrapper.
+
+El wrapper no importa Playwright ni Gemini ni mantiene un daemon `llmchat`.
+Cada llamada tiene un proceso propio. El CLI puede reutilizar la autenticación
+guardada en el perfil de navegador dedicado de LLMChat; ese perfil no es el
+perfil habitual del navegador del usuario. La conversación es temporal por
+defecto. MCP no abre autenticación interactiva automáticamente.
+
+En Windows resuelve el shim npm a su entrada JavaScript y ejecuta Node sin shell.
+Esto conserva comillas, saltos de línea y caracteres especiales del prompt.
+`LLMCHAT_EXECUTABLE` también puede apuntar directamente a `dist/cli.js` o a un
+ejecutable nativo. No se ejecutan wrappers `.cmd/.bat` arbitrarios.
+
+## Consultas naturales y contexto de issues
+
+Con Gemini autenticado, podés decir `Preguntale a Gemini qué riesgos ves en este
+issue` sin mencionar LLMChat. El tool `chat` describe esa capacidad. La skill
+[consult-llm](../.agents/skills/consult-llm/SKILL.md) se descubre en este checkout
+y enseña a preparar el contexto y a usar la respuesta para la acción pedida.
+
+Para usar la skill fuera de este repositorio, copiá esa carpeta a
+`~/.codex/skills/consult-llm` y abrí una sesión nueva de Codex. No hace falta
+modificar instrucciones globales ni nombrar la skill en cada pedido.
+
+El flujo y la relación entre los issues 84 y 85 están explicados en
+[mcp-provider-workflow.md](mcp-provider-workflow.md).
 
 ## Troubleshooting
 
 - `Unable to start llmchat`: verificá que `llmchat` esté en el `PATH` del proceso de Codex; podés definir `LLMCHAT_EXECUTABLE` para sobrescribirlo.
 - No aparecen tools: confirmá que `llmchat-mcp-wrapper` esté en el `PATH`, ejecutá `npm run install:global` y recargá MCP.
 - Error de schema/JSONL: asegurate de apuntar al CLI de este checkout y no a una instalación antigua.
-- Para Gemini, autenticá manualmente con `llmchat auth gemini` y verificá con `llmchat health gemini`.
+- Para Gemini, autenticá manualmente con `llmchat auth gemini`. `llmchat health gemini` verifica los controles de la página; una página saludable no demuestra que la sesión esté autenticada. La comprobación completa es una consulta que devuelva una respuesta del proveedor.
 
 No compartas credenciales, perfiles, logs ni screenshots en issues o reportes.

@@ -42,5 +42,12 @@ test('chat normalizes every requested output format to JSONL at the child bounda
   });
   await caller.callTool({ name: 'chat', arguments: { prompt: 'hello', outputFormat: 'yaml' } });
   await Promise.all([caller.close(), server.close()]);
-  assert.deepEqual(received, ['chat', 'hello', '--output', 'jsonl']);
+  assert.deepEqual(received, [
+    'chat',
+    '--output',
+    'jsonl',
+    '--disposable-conversation',
+    '--',
+    'hello',
+  ]);
 });

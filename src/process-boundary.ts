@@ -2,6 +2,7 @@ import { spawnSync } from 'node:child_process';
 import { mkdtempSync, rmdirSync, unlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { environmentForCommand } from './command-environment.js';
 
 export type CommandResult = {
   status: number | null;
@@ -22,6 +23,7 @@ export const nodeCommandRunner: CommandRunner = {
     const result = spawnSync(command, args, {
       encoding: 'utf8',
       windowsHide: true,
+      env: environmentForCommand(command, process.env),
     });
     return {
       status: result.status,

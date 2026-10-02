@@ -110,3 +110,19 @@ test('hidden login observation terminates on usable or cancelled states', async 
     });
   }
 });
+
+for (const [visible, expectedClosed] of [
+  [false, 1],
+  [true, 0],
+]) {
+  test(`unknown session probe closes only a hidden browser (visible=${visible})`, async () => {
+    const fake = launcher('unknown');
+    const availability = await createPersistentBrowserSessionPort(fake.port).checkSession({
+      ...request,
+      visible,
+    });
+    assert.equal(availability, 'indeterminate');
+    assert.equal(fake.closed(), expectedClosed);
+    assert.equal(fake.failures.length, 1);
+  });
+}

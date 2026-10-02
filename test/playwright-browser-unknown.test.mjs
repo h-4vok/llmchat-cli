@@ -6,6 +6,9 @@ test('visible unknown Gemini UI remains indeterminate', async () => {
   const page = {
     isClosed: () => false,
     locator: () => ({
+      filter() {
+        return this;
+      },
       first() {
         return this;
       },

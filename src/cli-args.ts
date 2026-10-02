@@ -26,6 +26,7 @@ type ParseState = {
 type OptionHandler = (option: string, args: string[], state: ParseState) => ChatArguments;
 
 const optionHandlers: Record<string, OptionHandler> = {
+  '--': parseLiteralPrompt,
   '--gem': parseSystemInstructions,
   '--gpt': parseSystemInstructions,
   '--keep-browser-open': parseKeepBrowserOpen,
@@ -36,6 +37,11 @@ const optionHandlers: Record<string, OptionHandler> = {
   '--reasoning': parseReasoning,
   '--system-instructions': parseSystemInstructions,
 };
+
+function parseLiteralPrompt(_option: string, args: string[], state: ParseState): ChatArguments {
+  state.promptParts.push(...args);
+  return parsedArguments(state);
+}
 
 function parseOutput(_option: string, args: string[], state: ParseState): ChatArguments {
   const { value, remaining } = optionValue(args, '--output');

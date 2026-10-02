@@ -6,10 +6,10 @@ export function printRootHelp(output: Output): void {
     speaker: 'llmchat',
     message: `Usage:
   llmchat chat "<prompt>" [--provider <provider>] [--model <visible name>] [--reasoning <value>] [--output <text|json|jsonl|yaml>] [--keep-browser-open] [--disposable-conversation] [--gem|--gpt|--system-instructions <name>]
-  llmchat auth <provider>
-  llmchat health <provider>
+  llmchat auth <provider> [--output <text|json|jsonl|yaml>]
+  llmchat health <provider> [--output <text|json|jsonl|yaml>]
   llmchat mcp
-  llmchat config <set-default-provider|clear-default-provider> [provider]
+  llmchat config <read|set-default-provider|clear-default-provider> [provider] [--output <text|json|jsonl|yaml>]
 
 Supported providers: ${supportedProviders.join(', ')}
 
@@ -34,6 +34,7 @@ export function printConfigHelp(output: Output): void {
     message: `Usage:
   llmchat config set-default-provider <provider>
   llmchat config clear-default-provider
+  llmchat config read [--output <text|json|jsonl|yaml>]
 
 Supported providers: ${supportedProviders.join(', ')}
 

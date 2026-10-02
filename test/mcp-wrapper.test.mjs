@@ -5,6 +5,7 @@ import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { createWrapperServer } from '../packages/mcp-wrapper/src/server.mjs';
 import { runCliProcess } from '../dist/cli-app.js';
 import { adminFormat, emitAdmin } from '../dist/admin-output.js';
+import { isolateCliStorage } from '../test-support/isolated-cli-storage.mjs';
 import {
   createProcessClient,
   ProcessProtocolError,
@@ -59,7 +60,6 @@ test('wrapper forwards chat options to the subprocess boundary', async () => {
   assert.equal(result.structuredContent.status, 'success');
   assert.deepEqual(received, [
     'chat',
-    'hello',
     '--provider',
     'demo',
     '--model',
@@ -71,6 +71,8 @@ test('wrapper forwards chat options to the subprocess boundary', async () => {
     '--output',
     'jsonl',
     '--disposable-conversation',
+    '--',
+    'hello',
   ]);
 });
 
@@ -85,7 +87,8 @@ test('process boundary parses terminal JSONL and reports malformed output', asyn
   await assert.rejects(bad.run(['-e', "console.log('not json')"]), ProcessProtocolError);
 });
 
-test('administrative formatter and config read emit versioned JSONL', async () => {
+test('administrative formatter and config read emit versioned JSONL', async (t) => {
+  await isolateCliStorage(t);
   const raw = [];
   const output = { emit() {}, raw: (value) => raw.push(value) };
   assert.deepEqual(adminFormat(['gemini']), { args: ['gemini'], format: 'text' });
@@ -111,7 +114,7 @@ test('process boundary rejects nonzero exit and unsupported schema', async () =>
   await assert.rejects(
     client.run([
       '-e',
-      "console.log(JSON.stringify({schemaVersion:1,type:'result',status:'success'}));process.exit(3)",
+      "console.log(JSON.stringify({schemaVersion:1,type:'result',status:'success',response:{text:'ok'}}));process.exit(3)",
     ]),
     /exited with code 3/,
   );

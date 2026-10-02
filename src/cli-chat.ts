@@ -34,6 +34,7 @@ async function executeWithContext(
     request,
     keepBrowserOpen: Boolean(parsed.keepBrowserOpen),
     output: textOutput(parsed.output, output),
+    sessionOptions: { interactive: process.env.LLMCHAT_NON_INTERACTIVE !== '1' },
   });
 }
 

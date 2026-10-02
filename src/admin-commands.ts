@@ -12,9 +12,17 @@ export function runConfig(args: string[], output: Output): void {
   const parsed = adminFormat(args);
   args = parsed.args;
   if (isConfigHelp(args)) return printConfigHelp(output);
-  if (isConfigRead(args)) return emitAdmin(output, 'config', resolveConfig(), parsed.format);
+  if (isConfigRead(args)) return emitConfigRead(output, parsed.format);
   configAction(args)(args);
   emitAdmin(output, 'config', resolveConfig(), parsed.format);
+}
+function emitConfigRead(output: Output, format: ReturnType<typeof adminFormat>['format']): void {
+  const config = resolveConfig();
+  if (format === 'text') {
+    output.emit({ speaker: 'llmchat', message: JSON.stringify(config, null, 2) });
+    return;
+  }
+  emitAdmin(output, 'config', config, format);
 }
 function isConfigHelp(args: string[]): boolean {
   return !args.length || ['--help', '-h'].includes(args[0]);
@@ -74,13 +82,20 @@ function getSession(
   provider: string,
   context: ReturnType<ChatRuntime['contextFor']>,
 ) {
-  return runtime.ensureSession?.(provider, context, { visible: true });
+  return runtime.ensureSession?.(provider, context, {
+    visible: true,
+    interactive: process.env.LLMCHAT_NON_INTERACTIVE !== '1',
+  });
 }
 
 function validateAuthResult(result: BrowserSessionResult | undefined, provider: string): void {
-  if (!result) return;
-  if (result.status === 'indeterminate') throw new Error(messages.geminiLoginRequired);
-  if (result.status === 'cancelled') throw new Error(`${provider} authentication was cancelled.`);
+  const failures: Record<string, string> = {
+    'authentication-required': `Provider ${provider} requires authentication. Run "llmchat auth ${provider}" in a local terminal.`,
+    indeterminate: messages.geminiLoginRequired,
+    cancelled: `${provider} authentication was cancelled.`,
+  };
+  const message = failures[result?.status ?? ''];
+  if (message) throw new Error(message);
 }
 function emitAuthSuccess(output: Output, result: BrowserSessionResult | undefined): void {
   if (result?.status !== 'ready') return;
@@ -100,18 +115,17 @@ export async function runHealth(
   args = parsed.args;
   if (args.length !== 1) throw new Error('Usage: llmchat health <provider>.');
   const provider = resolveProvider(args[0]);
-  await withRuntimeContext(runtime, provider, async (context) =>
-    emitHealth(runtime, provider, context, output, parsed.format),
-  );
+  await withRuntimeContext(runtime, provider, async (context) => {
+    const health = await runtime.adapterFor(provider).checkHealth(context);
+    emitHealth(health, provider, output, parsed.format);
+  });
 }
-async function emitHealth(
-  runtime: ChatRuntime,
+function emitHealth(
+  health: Awaited<ReturnType<ReturnType<ChatRuntime['adapterFor']>['checkHealth']>>,
   provider: string,
-  context: ReturnType<ChatRuntime['contextFor']>,
   output: Output,
   format: ReturnType<typeof adminFormat>['format'],
-): Promise<void> {
-  const health = await runtime.adapterFor(provider).checkHealth(context);
+): void {
   if (health.status === 'broken') throw new Error(health.message);
   output.emit({ speaker: 'llmchat', message: health.message });
   emitAdmin(output, 'health', { provider, status: health.status, message: health.message }, format);

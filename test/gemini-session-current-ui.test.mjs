@@ -16,6 +16,9 @@ function fixture(marker) {
   const page = {
     isClosed: () => false,
     locator: (selector) => ({
+      filter() {
+        return this;
+      },
       first() {
         return this;
       },
@@ -123,7 +126,7 @@ test('positive login evidence is distinct from unknown authenticated UI', async 
   assert.equal(drift.calls.filter(([kind]) => kind === 'wait').length, 14);
   assert.equal(
     drift.calls.some(([kind]) => kind === 'close'),
-    false,
+    true,
   );
   assert.deepEqual(
     drift.artifacts.map(([kind]) => kind),

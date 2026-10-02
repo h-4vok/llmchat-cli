@@ -11,6 +11,9 @@ function fixture(useExistingPage = false) {
     isClosed: () => closed,
     locator(selector) {
       return {
+        filter() {
+          return this;
+        },
         first() {
           return this;
         },
