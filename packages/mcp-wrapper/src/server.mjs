@@ -3,7 +3,14 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import * as z from 'zod/v4';
 import { createProcessClient } from './process-client.mjs';
 
-import { instructions, provider, chatInput, mcpResult, failure } from './tool-contract.mjs';
+import {
+  instructions,
+  provider,
+  headless,
+  chatInput,
+  mcpResult,
+  failure,
+} from './tool-contract.mjs';
 
 export function createWrapperServer(client = createProcessClient()) {
   const server = new McpServer({ name: 'llmchat-mcp-wrapper', version: '1.0.0' }, { instructions });
@@ -34,7 +41,7 @@ export function createWrapperServer(client = createProcessClient()) {
       title: 'Health',
       description:
         'Check provider availability without sending a prompt. Gemini checks its browser UI; demo is offline.',
-      inputSchema: { provider },
+      inputSchema: { provider, headless },
     },
     async (input, extra) => invoke(adminArgs('health', input), extra),
   );
@@ -84,10 +91,17 @@ function flags(input) {
     output: 'jsonl',
   })
     .flatMap(([key, value]) => (value === undefined ? [] : [`--${key}`, String(value)]))
-    .concat(input.disposableConversation ? ['--disposable-conversation'] : []);
+    .concat(input.disposableConversation ? ['--disposable-conversation'] : [])
+    .concat(input.headless ? ['--headless'] : []);
 }
 function adminArgs(command, input) {
-  return [command, input.provider, '--output', 'jsonl'];
+  return [
+    command,
+    input.provider,
+    '--output',
+    'jsonl',
+    ...(input.headless === false ? [] : ['--headless']),
+  ];
 }
 function configArgs(input) {
   if (input.action === 'read') return ['config', 'read', '--output', 'jsonl'];

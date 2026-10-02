@@ -1,6 +1,10 @@
 import { createGeminiUiConversation } from '../dist/gemini-ui-conversation.js';
 
-export function geminiInterventionFixture(initialIntervention, postSendIntervention) {
+export function geminiInterventionFixture(
+  initialIntervention,
+  postSendIntervention,
+  headless = false,
+) {
   const calls = [];
   const notifications = [];
   let intervention = initialIntervention;
@@ -45,6 +49,7 @@ export function geminiInterventionFixture(initialIntervention, postSendIntervent
       page,
       { saveDiagnostic, saveScreenshot },
       { send: async (notification) => notifications.push(notification) },
+      headless,
     ),
     resolve() {
       intervention = undefined;

@@ -6,6 +6,12 @@ description: Consult Gemini or another implemented LLMChat provider when the use
 Use the available LLMChat MCP `chat` tool (the subprocess wrapper) or `ask_llm`
 (the in-process server). Select `provider: gemini` when Gemini is named. Omit
 model and reasoning unless requested. Use a disposable conversation by default.
+Preserve requested model variants: "Flash" means Flash, never Flash Lite.
+Pass the user's model name; do not guess a different version or substitute a
+model after a selection error. Flash and Flash Lite are distinct choices.
+Keep `headless: true` (the MCP default); set `headless: false` only when the
+user explicitly asks to see the browser. MCP `auth` only checks the session
+in a hidden browser; interactive login remains a local terminal action.
 Only Gemini and the offline `demo` provider are currently implemented. If the
 user names DeepSeek, Claude, or another unavailable provider, explain that it
 is not supported yet; do not silently substitute Gemini.

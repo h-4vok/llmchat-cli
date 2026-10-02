@@ -71,6 +71,7 @@ test('wrapper forwards chat options to the subprocess boundary', async () => {
     '--output',
     'jsonl',
     '--disposable-conversation',
+    '--headless',
     '--',
     'hello',
   ]);

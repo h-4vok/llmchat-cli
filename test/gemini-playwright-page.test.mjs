@@ -52,6 +52,7 @@ test('Playwright page boundary centralizes selectors and viewport operations', a
       calls.push(['locator', selector]);
       return locator(calls, selector);
     },
+    getByText: () => ({}),
     async waitForTimeout(ms) {
       calls.push(['wait', ms]);
     },
@@ -121,19 +122,19 @@ test('Temporary chat targets the current component host', () => {
 });
 
 test('selected Playwright menu items expose active state', async () => {
-  const page = { locator: () => locator([], 'selected') };
+  const page = { locator: () => locator([], 'selected'), getByText: () => ({}) };
   const boundary = createGeminiPlaywrightPage(page, {});
   assert.equal(await boundary.exactText('Extended thinking').active(), true);
 });
 
 test('nested selected Playwright menu icons expose active state', async () => {
-  const page = { locator: () => locator([], 'selected-query') };
+  const page = { locator: () => locator([], 'selected-query'), getByText: () => ({}) };
   const boundary = createGeminiPlaywrightPage(page, {});
   assert.equal(await boundary.exactText('Extended thinking').active(), true);
 });
 
 test('detached Playwright active state is treated as inactive', async () => {
-  const page = { locator: () => locator([], 'rejected') };
+  const page = { locator: () => locator([], 'rejected'), getByText: () => ({}) };
   const boundary = createGeminiPlaywrightPage(page, {});
   assert.equal(await boundary.exactText('Extended thinking').active(), false);
 });

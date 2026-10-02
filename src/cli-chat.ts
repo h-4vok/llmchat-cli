@@ -34,8 +34,13 @@ async function executeWithContext(
     request,
     keepBrowserOpen: Boolean(parsed.keepBrowserOpen),
     output: textOutput(parsed.output, output),
-    sessionOptions: { interactive: process.env.LLMCHAT_NON_INTERACTIVE !== '1' },
+    sessionOptions: chatSessionOptions(parsed),
   });
+}
+
+function chatSessionOptions(parsed: ReturnType<typeof parseChat>) {
+  if (parsed.headless) return { interactive: false, visible: false };
+  return { interactive: process.env.LLMCHAT_NON_INTERACTIVE !== '1' };
 }
 
 function showHelp(output: Output): 0 {
@@ -69,6 +74,7 @@ function chatRequest(parsed: ReturnType<typeof parseChat>) {
     prompt: parsed.prompt as string,
     systemInstructions: parsed.systemInstructions,
     ...(parsed.reasoning === undefined ? {} : { reasoning: parsed.reasoning }),
+    ...(parsed.headless === undefined ? {} : { headless: parsed.headless }),
     keepBrowserOpen: parsed.keepBrowserOpen,
     disposableConversation: parsed.disposableConversation,
   };

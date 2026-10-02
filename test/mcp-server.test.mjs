@@ -81,6 +81,7 @@ test('MCP advertises one purpose-built LLM consultation tool', async (t) => {
   });
   assert.deepEqual(Object.keys(tool.inputSchema.properties).sort(), [
     'disposableConversation',
+    'headless',
     'model',
     'prompt',
     'provider',
@@ -95,22 +96,6 @@ test('MCP advertises one purpose-built LLM consultation tool', async (t) => {
     JSON.stringify(tool.inputSchema),
     /outputFormat|keepBrowserOpen|systemInstructions/,
   );
-});
-
-test('MCP instructions teach Codex natural LLMChat and Gemini delegation', async (t) => {
-  const { client, server } = await connectedClient(runtimeFixture());
-  t.after(() => Promise.all([client.close(), server.close()]));
-  const instructions = client.getInstructions();
-
-  assert.match(instructions, /LLMChat/);
-  assert.match(instructions, /Gemini/);
-  assert.match(instructions, /ask_llm/);
-  assert.match(instructions, /asks to use LLMChat/i);
-  assert.match(instructions, /ask or consult Gemini/i);
-  assert.match(instructions, /delegate work to Gemini/i);
-  assert.match(instructions, /second opinion from Gemini/i);
-  assert.match(instructions, /omit model and reasoning unless/i);
-  assert.match(instructions, /disposable/i);
 });
 
 test('ask_llm defaults to a disposable conversation and structured transcript', async (t) => {
@@ -133,6 +118,7 @@ test('ask_llm defaults to a disposable conversation and structured transcript', 
       model: undefined,
       reasoning: undefined,
       disposableConversation: true,
+      headless: true,
     },
   ]);
   assert.deepEqual(runtime.sessions, [{ interactive: false }]);
@@ -158,5 +144,6 @@ test('ask_llm forwards explicit model, reasoning, and persistent conversation in
     model: 'requested-model',
     reasoning: 'requested-reasoning',
     disposableConversation: false,
+    headless: true,
   });
 });

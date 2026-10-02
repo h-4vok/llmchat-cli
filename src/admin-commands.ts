@@ -1,6 +1,7 @@
 import type { ChatRuntime } from './chat-runtime.js';
 import { printConfigHelp } from './cli-help.js';
 import { adminFormat, emitAdmin } from './admin-output.js';
+import { adminBrowserArguments } from './admin-browser-arguments.js';
 import { removeDefaultProvider, resolveConfig, saveDefaultProvider } from './config.js';
 import { messages } from './config/messages.js';
 import type { Output } from './output.js';
@@ -50,7 +51,7 @@ function clearDefaultProvider(args: string[]): void {
 }
 
 export async function runAuth(args: string[], output: Output, runtime: ChatRuntime): Promise<void> {
-  const parsed = adminFormat(args);
+  const parsed = adminBrowserArguments(args);
   args = parsed.args;
   if (args.length !== 1) throw new Error('Usage: llmchat auth <provider>.');
   const provider = resolveProvider(args[0]);
@@ -62,7 +63,7 @@ export async function runAuth(args: string[], output: Output, runtime: ChatRunti
     return emitAdmin(output, 'auth', { provider }, parsed.format);
   }
   await withRuntimeContext(runtime, provider, async (context) => {
-    const result = await authenticate(runtime, provider, context);
+    const result = await authenticate(runtime, provider, context, parsed.headless);
     emitAuthSuccess(output, result);
     emitAdmin(output, 'auth', { provider, status: result?.status ?? 'unknown' }, parsed.format);
   });
@@ -71,8 +72,9 @@ async function authenticate(
   runtime: ChatRuntime,
   provider: string,
   context: ReturnType<ChatRuntime['contextFor']>,
+  headless: boolean,
 ) {
-  const result = await getSession(runtime, provider, context);
+  const result = await getSession(runtime, provider, context, headless);
   validateAuthResult(result, provider);
   return result;
 }
@@ -81,10 +83,11 @@ function getSession(
   runtime: ChatRuntime,
   provider: string,
   context: ReturnType<ChatRuntime['contextFor']>,
+  headless: boolean,
 ) {
   return runtime.ensureSession?.(provider, context, {
-    visible: true,
-    interactive: process.env.LLMCHAT_NON_INTERACTIVE !== '1',
+    visible: !headless,
+    interactive: !headless && process.env.LLMCHAT_NON_INTERACTIVE !== '1',
   });
 }
 
@@ -111,11 +114,12 @@ export async function runHealth(
   output: Output,
   runtime: ChatRuntime,
 ): Promise<void> {
-  const parsed = adminFormat(args);
+  const parsed = adminBrowserArguments(args);
   args = parsed.args;
   if (args.length !== 1) throw new Error('Usage: llmchat health <provider>.');
   const provider = resolveProvider(args[0]);
   await withRuntimeContext(runtime, provider, async (context) => {
+    if (parsed.headless) context.configuration = { ...context.configuration, headless: true };
     const health = await runtime.adapterFor(provider).checkHealth(context);
     emitHealth(health, provider, output, parsed.format);
   });

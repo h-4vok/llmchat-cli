@@ -60,17 +60,11 @@ test('disposable chat enables Temporary chat before every other chat action', as
   );
 });
 
-test('model fallback covers omitted, hidden, and changed model controls', async () => {
-  for (const options of [
-    { request: { prompt: 'hello' } },
-    { modelOpenerVisible: false, request: { prompt: 'hello', model: 'Pro' } },
-    { choiceThrows: true, request: { prompt: 'hello', model: 'Pro' } },
-  ]) {
-    const session = fixture(options);
-    const signals = [];
-    await session.conversation.submit(options.request, (signal) => signals.push(signal));
-    assert.equal(signals.at(-1).kind, 'response');
-  }
+test('an omitted model uses the current selection', async () => {
+  const session = fixture();
+  const signals = [];
+  await session.conversation.submit({ prompt: 'hello' }, (signal) => signals.push(signal));
+  assert.equal(signals.at(-1).kind, 'response');
 });
 
 test('observable composition emits activity before the final response', async () => {
@@ -116,25 +110,6 @@ test('local diagnosis reports visible errors or stalled UI and closes explicitly
   await stalled.conversation.close();
   await stalled.conversation.waitForClose();
   assert.ok(stalled.calls.some((call) => call[0] === 'close-page'));
-});
-
-test('missing requested model falls back to the active model without error', async () => {
-  const session = fixture({ modelVisible: false });
-  const signals = [];
-  await session.conversation.submit({ prompt: 'hello', model: 'Unavailable' }, (signal) =>
-    signals.push(signal),
-  );
-  assert.equal(signals.at(-1).kind, 'response');
-  assert.ok(session.calls.some((call) => call[0] === 'click' && call[1] === 'send'));
-});
-
-test('disabled requested model selects 3.5 Flash-Lite before filling and sending', async () => {
-  const session = fixture({ modelEnabled: false });
-  await session.conversation.submit({ prompt: 'hello', model: '3.6 Flash' }, () => {});
-  const actions = session.calls.map((call) => (call[0] === 'click' ? call[1] : call[0]));
-  assert.ok(actions.indexOf('choice:3.5 Flash-Lite') < actions.indexOf('fill'));
-  assert.ok(actions.indexOf('fill') < actions.indexOf('send'));
-  assert.ok(session.calls.some((call) => call[1] === 'choice:3.5 Flash-Lite'));
 });
 
 test('visible Gemini errors propagate their innerText', async () => {

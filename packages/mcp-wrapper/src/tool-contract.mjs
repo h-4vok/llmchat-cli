@@ -9,12 +9,20 @@ const nonempty = z
 export const provider = nonempty.describe(
   'Provider ID: gemini for Gemini, demo for offline examples. Other providers are not implemented yet.',
 );
+export const headless = z
+  .boolean()
+  .default(true)
+  .describe('Hide the browser by default; false only when the user explicitly asks to show it.');
 export const chatInput = {
   prompt: nonempty.describe(
     'Self-contained request including issue text, relevant context and desired outcome. The provider cannot see this Codex conversation.',
   ),
   provider: provider.optional(),
-  model: nonempty.optional().describe('Exact provider model name; omit unless requested.'),
+  model: nonempty
+    .optional()
+    .describe(
+      'Requested provider model name; omit unless requested. Flash and Flash Lite are distinct; never substitute Lite for Flash.',
+    ),
   reasoning: nonempty.optional().describe('Exact provider reasoning mode; omit unless requested.'),
   systemInstructions: nonempty
     .optional()
@@ -24,6 +32,7 @@ export const chatInput = {
     .default(true)
     .describe('Temporary conversation by default; false only when preservation is requested.'),
   outputFormat: z.enum(['text', 'json', 'jsonl', 'yaml']).optional(),
+  headless,
 };
 
 export function mcpResult(record, format = 'text') {

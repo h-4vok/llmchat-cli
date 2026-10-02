@@ -21,8 +21,8 @@ export interface GeminiConversation extends GeminiPromptPort {
 }
 
 export interface GeminiBrowserPort {
-  open(context: AdapterContext): Promise<GeminiConversation>;
-  health(context: AdapterContext): Promise<AdapterHealth>;
+  open(context: AdapterContext, options?: { headless?: boolean }): Promise<GeminiConversation>;
+  health(context: AdapterContext, options?: { headless?: boolean }): Promise<AdapterHealth>;
 }
 
 export type GeminiAdapterOptions = {
@@ -35,7 +35,7 @@ export function createGeminiAdapter(options: GeminiAdapterOptions): ProviderAdap
   return {
     provider: 'gemini',
     async executeChat(request, context, signal = new AbortController().signal) {
-      const conversation = await options.browser.open(context);
+      const conversation = await options.browser.open(context, { headless: request.headless });
       try {
         const response = await runConversation(conversation, request, {
           context,
@@ -48,14 +48,17 @@ export function createGeminiAdapter(options: GeminiAdapterOptions): ProviderAdap
       } catch (failure) {
         const error = asError(failure);
         diagnostic = { state: 'error', message: redactDiagnosticText(error.message) };
-        await handleFailure(conversation, error, signal);
+        await handleFailure(conversation, error, signal, Boolean(request.headless));
         throw error;
       }
     },
     async diagnose() {
       return diagnostic;
     },
-    checkHealth: (context) => options.browser.health(context),
+    checkHealth: (context) =>
+      options.browser.health(context, {
+        headless: context.configuration.headless === true,
+      }),
   };
 }
 
@@ -73,9 +76,13 @@ async function handleFailure(
   conversation: GeminiConversation,
   error: Error,
   signal: AbortSignal,
+  headless: boolean,
 ): Promise<void> {
-  await conversation.persistFailure(error);
-  if (shouldCloseAfterFailure(error, signal)) await conversation.close();
+  try {
+    await conversation.persistFailure(error);
+  } finally {
+    if (headless || shouldCloseAfterFailure(error, signal)) await conversation.close();
+  }
 }
 
 function shouldCloseAfterFailure(error: Error, signal: AbortSignal): boolean {

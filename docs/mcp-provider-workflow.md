@@ -35,6 +35,24 @@ navegador dedicado por proveedor. El wrapper no mantiene estado en memoria
 entre llamadas. Las conversaciones son temporales por defecto; compartir la
 autenticación no transfiere el contexto de una consulta a la siguiente.
 
+Las consultas MCP y los chequeos `health` ocultan el navegador por defecto:
+el wrapper agrega `--headless` al CLI y `ask_llm` aplica la misma política.
+Sólo un pedido explícito de mostrarlo justifica `headless: false`. `auth`
+comprueba la sesión siempre oculto; el login interactivo se hace en una terminal.
+El CLI directo mantiene el navegador visible salvo que se pase `--headless`.
+Si aparece un login, CAPTCHA o bloqueo durante una consulta oculta, se devuelve
+un error accionable y se cierra el navegador, sin esperar intervención ni
+reenviar el prompt. Mostrar la página requiere un pedido explícito del usuario.
+
+Los modelos pedidos se respetan sin fallback: «Flash» nunca elige «Flash Lite».
+El nombre completo debe coincidir con la etiqueta del menú. Los alias Flash y
+Flash Lite admiten una versión visible única, distinguiendo ambas variantes;
+si hay varias versiones coincidentes, se requiere un nombre completo. Un modelo
+ausente, deshabilitado o ambiguo falla antes de escribir o enviar el prompt.
+Después de seleccionar, se verifica el botón; si abrevia el nombre y omite la
+versión, se comprueba la opción marcada en el menú. El espacio de presentación
+alrededor de las etiquetas no cambia la identidad del modelo.
+
 Hay dos endpoints locales diferentes:
 
 | Endpoint                                     | Herramientas                       | Ejecución                   |

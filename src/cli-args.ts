@@ -6,6 +6,7 @@ export type ChatArguments = {
   provider?: string;
   systemInstructions?: string;
   keepBrowserOpen?: boolean;
+  headless?: boolean;
   disposableConversation?: boolean;
   output: OutputFormat;
 };
@@ -19,6 +20,7 @@ type ParseState = {
   provider?: string;
   systemInstructions?: string;
   keepBrowserOpen?: boolean;
+  headless?: boolean;
   disposableConversation?: boolean;
   output?: OutputFormat;
   flag?: string;
@@ -30,6 +32,7 @@ const optionHandlers: Record<string, OptionHandler> = {
   '--gem': parseSystemInstructions,
   '--gpt': parseSystemInstructions,
   '--keep-browser-open': parseKeepBrowserOpen,
+  '--headless': parseHeadless,
   '--disposable-conversation': parseDisposableConversation,
   '--model': parseModel,
   '--output': parseOutput,
@@ -68,6 +71,11 @@ function parseReasoning(_option: string, args: string[], state: ParseState): Cha
 
 function parseKeepBrowserOpen(_option: string, args: string[], state: ParseState): ChatArguments {
   state.keepBrowserOpen = true;
+  return parseRemaining(args, state);
+}
+
+function parseHeadless(_option: string, args: string[], state: ParseState): ChatArguments {
+  state.headless = true;
   return parseRemaining(args, state);
 }
 
@@ -148,6 +156,7 @@ function parsedArguments(state: ParseState): ChatArguments {
     output: outputOrDefault(state.output),
   } as ChatArguments;
   if (state.reasoning !== undefined) parsed.reasoning = state.reasoning;
+  if (state.headless !== undefined) parsed.headless = state.headless;
   return parsed;
 }
 

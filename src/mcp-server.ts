@@ -44,6 +44,7 @@ function registerAskLlm(server: McpServer, runtime: ChatRuntime, config: McpConf
           model: input.model,
           reasoning: input.reasoning,
           disposableConversation: input.disposableConversation,
+          headless: input.headless,
         },
         keepBrowserOpen: false,
         sessionOptions: { interactive: false },

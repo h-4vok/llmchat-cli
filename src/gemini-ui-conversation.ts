@@ -39,6 +39,7 @@ export interface GeminiUiPage extends GeminiArtifactPage {
   goto(url: string): Promise<void>;
   element(name: GeminiElementName): GeminiUiElement;
   exactText(text: string): GeminiUiElement;
+  modelOption(text: string): GeminiUiElement;
   wait(): Promise<void>;
   closed(): boolean;
   close(): Promise<void>;
@@ -47,14 +48,14 @@ export interface GeminiUiPage extends GeminiArtifactPage {
 
 export type { GeminiArtifactPort } from './gemini-failure-artifacts.js';
 const newConversationUrl = geminiConfig.appUrl;
-const geminiFallbackModel = '3.5 Flash-Lite';
 
 export function createGeminiUiConversation(
   page: GeminiUiPage,
   artifacts: GeminiArtifactPort,
   notifications: NativeNotificationPort,
+  headless = false,
 ): GeminiConversation {
-  const waitForIntervention = createGeminiInterventionWaiter(page, notifications);
+  const waitForIntervention = createGeminiInterventionWaiter(page, notifications, headless);
   return {
     async submit(request, emit, signal) {
       await page.goto(newConversationUrl);
@@ -85,13 +86,7 @@ async function selectModel(
   cancellation?: AbortSignal,
 ): Promise<void> {
   if (!model) return;
-  try {
-    const selected = await selectModelFromMenu(page, model, emit, cancellation);
-    if (!selected) await selectModelFromMenu(page, geminiFallbackModel, emit, cancellation);
-  } catch {
-    throwIfAborted(cancellation);
-    return;
-  }
+  await selectModelFromMenu(page, model, emit, cancellation);
 }
 async function monitor(
   page: GeminiUiPage,

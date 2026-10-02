@@ -47,6 +47,7 @@ test('chat normalizes every requested output format to JSONL at the child bounda
     '--output',
     'jsonl',
     '--disposable-conversation',
+    '--headless',
     '--',
     'hello',
   ]);

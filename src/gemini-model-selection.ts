@@ -1,6 +1,13 @@
 import type { GeminiSignal } from './gemini-flow.js';
 import { requestedReasoning, resolveGeminiReasoning } from './config/reasoning.js';
-import type { GeminiElementName, GeminiUiElement, GeminiUiPage } from './gemini-ui-conversation.js';
+import type { GeminiUiElement, GeminiUiPage } from './gemini-ui-conversation.js';
+import {
+  waitForUsable,
+  waitForUsableText,
+  usable,
+  assertNotAborted,
+} from './gemini-selection-wait.js';
+import { confirmGeminiModel } from './gemini-model-confirmation.js';
 
 type Emit = (signal: GeminiSignal) => void;
 type ReasoningSelectionArguments = [
@@ -30,17 +37,31 @@ export async function selectModel(
   model: string,
   emit: Emit,
   signal?: AbortSignal,
-): Promise<boolean> {
+): Promise<void> {
   const selection = await openModelSelection(page, signal);
   emit({ kind: 'activity', message: `Gemini model selection command: ${model}` });
-  const choice = selection.option(model);
-  if (!(await usable(choice))) return false;
+  const choice = await requestedModelChoice(page, model, signal);
+  const choiceText = await choice.innerText();
   await choice.click();
-  emit({
-    kind: 'activity',
-    message: `Gemini model selector text: ${await selection.opener.innerText()}`,
-  });
-  return true;
+  const selected = await selection.opener.innerText();
+  emit({ kind: 'activity', message: `Gemini model selector text: ${selected}` });
+  await confirmGeminiModel(selection.opener, choice, model, selected);
+  emit({ kind: 'activity', message: `Gemini selected model menu option: ${choiceText.trim()}` });
+}
+
+async function requestedModelChoice(
+  page: GeminiUiPage,
+  model: string,
+  signal?: AbortSignal,
+): Promise<GeminiUiElement> {
+  try {
+    return await waitForUsableText(page, (text) => page.modelOption(text), model, signal);
+  } catch (error) {
+    assertNotAborted(signal);
+    throw new Error(`Gemini model "${model}" is unavailable or ambiguous; no prompt was sent.`, {
+      cause: error,
+    });
+  }
 }
 
 export async function selectReasoningMode(
@@ -111,45 +132,6 @@ async function verifyReasoning(
 ): Promise<void> {
   if ((await opener.innerText()).includes('Extended') !== desired)
     warnReasoning(emit, 'reasoning state could not be verified');
-}
-
-async function waitForUsable(
-  page: GeminiUiPage,
-  name: GeminiElementName,
-  signal?: AbortSignal,
-): Promise<GeminiUiElement> {
-  for (let attempt = 0; attempt < 30; attempt += 1) {
-    assertNotAborted(signal);
-    const element = page.element(name);
-    if (await usable(element)) return element;
-    await page.wait();
-    assertNotAborted(signal);
-  }
-  throw new Error(`Gemini UI changed: ${name} selector did not become usable.`);
-}
-
-async function waitForUsableText(
-  page: GeminiUiPage,
-  option: (text: string) => GeminiUiElement,
-  text: string,
-  signal?: AbortSignal,
-): Promise<GeminiUiElement> {
-  for (let attempt = 0; attempt < 30; attempt += 1) {
-    assertNotAborted(signal);
-    const element = option(text);
-    if (await usable(element)) return element;
-    await page.wait();
-    assertNotAborted(signal);
-  }
-  throw new Error(`Gemini UI changed: ${text} option did not become usable.`);
-}
-
-function assertNotAborted(signal: AbortSignal | undefined): void {
-  signal?.throwIfAborted();
-}
-
-async function usable(element: GeminiUiElement): Promise<boolean> {
-  return (await element.visible()) && (await element.enabled());
 }
 
 function warnUnsupported(value: string | undefined, emit: Emit): void {

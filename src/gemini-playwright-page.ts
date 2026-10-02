@@ -1,13 +1,23 @@
 import type { BrowserContext, Locator, Page } from 'playwright';
 import { geminiSelectors } from './gemini-selectors.js';
 import type { GeminiUiElement, GeminiUiPage } from './gemini-ui-conversation.js';
+import { geminiModelNamePattern } from './gemini-model-name.js';
 
 export function createGeminiPlaywrightPage(page: Page, context: BrowserContext): GeminiUiPage {
   return {
     goto: async (url) => void (await page.goto(url)),
     element: (name) => playwrightElement(page.locator(geminiSelectors[name]).first()),
     exactText: (text) =>
-      playwrightElement(page.locator('gem-menu-item').filter({ hasText: text }).first()),
+      playwrightElement(
+        page.locator('gem-menu-item').filter({ has: page.getByText(text, { exact: true }) }),
+      ),
+    modelOption: (text) =>
+      playwrightElement(
+        page
+          .locator('gem-menu-item')
+          .filter({ has: page.getByText(geminiModelNamePattern(text)) })
+          .filter({ visible: true }),
+      ),
     wait: () => page.waitForTimeout(500),
     closed: () => page.isClosed(),
     currentUrl: () => page.url(),
