@@ -75,6 +75,11 @@ MCP request needs authentication, its error tells the caller which `llmchat auth
 command to run locally; the MCP never opens a login browser. The MCP does not
 expose output formatting, browser lifetime, or system-instruction options.
 
+To connect the independent subprocess wrapper to Codex, follow
+[`docs/mcp-codex-local.md`](docs/mcp-codex-local.md). The wrapper exposes
+`chat`, `health`, `auth`, and `config`, and invokes `llmchat` as a child process
+for each tool call.
+
 Use `llmchat --help` and `llmchat config --help` for command usage. Gemini reasoning values are `Standard` and `Extended thinking`; unknown provider-specific values produce a warning and do not stop the chat.
 
 ## Alpha limitations and manual checks
