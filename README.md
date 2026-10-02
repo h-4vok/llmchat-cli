@@ -70,10 +70,26 @@ are optional. The conversation is disposable by default and can be retained by
 sending `disposableConversation: false`. Results include both compatible text
 content and a versioned structured transcript.
 
+Both MCP endpoints hide the provider browser by default. Set `headless: false`
+only when the user explicitly asks to show it. The wrapper also hides `health`
+checks and always checks `auth` without an interactive login. Direct CLI commands
+support `--headless`; otherwise their browser stays visible.
+Requested Gemini models never silently fall back: Flash and Flash Lite are
+distinct. A missing, disabled, or ambiguous model fails before sending a prompt.
+
 Authentication, health, and configuration remain CLI responsibilities. If an
 MCP request needs authentication, its error tells the caller which `llmchat auth`
 command to run locally; the MCP never opens a login browser. The MCP does not
 expose output formatting, browser lifetime, or system-instruction options.
+
+To connect the independent subprocess wrapper to Codex, follow
+[`docs/mcp-codex-local.md`](docs/mcp-codex-local.md). The wrapper exposes
+`chat`, `health`, `auth`, and `config`, and invokes `llmchat` as a child process
+for each tool call.
+Natural requests such as "ask Gemini to analyze this issue" are described by
+the wrapper's tool metadata and the optional `consult-llm` skill. See
+[`docs/mcp-provider-workflow.md`](docs/mcp-provider-workflow.md) for context
+handoff, GitHub edits, and the distinction between the two local MCP endpoints.
 
 Use `llmchat --help` and `llmchat config --help` for command usage. Gemini reasoning values are `Standard` and `Extended thinking`; unknown provider-specific values produce a warning and do not stop the chat.
 

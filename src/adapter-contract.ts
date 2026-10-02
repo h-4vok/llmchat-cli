@@ -28,6 +28,7 @@ export type ChatRequest = {
   reasoning?: string;
   systemInstructions?: string;
   keepBrowserOpen?: boolean;
+  headless?: boolean;
   disposableConversation?: boolean;
 };
 export type ChatResponse = {

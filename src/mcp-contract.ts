@@ -14,7 +14,9 @@ export const askLlmInput = {
   model: z
     .string()
     .optional()
-    .describe('Exact provider-visible model name. Omit unless the user requests a model.'),
+    .describe(
+      'Requested provider-visible model name. Omit unless requested. Flash and Flash Lite are distinct; never substitute Lite for Flash.',
+    ),
   reasoning: z
     .string()
     .optional()
@@ -23,6 +25,10 @@ export const askLlmInput = {
     .boolean()
     .default(true)
     .describe('Use an isolated disposable conversation unless the user asks to preserve it.'),
+  headless: z
+    .boolean()
+    .default(true)
+    .describe('Hide the browser by default; false only when the user explicitly asks to show it.'),
 };
 
 const requestOptions = z.object({
@@ -30,6 +36,7 @@ const requestOptions = z.object({
   model: z.string().optional(),
   reasoning: z.string().optional(),
   disposableConversation: z.boolean(),
+  headless: z.boolean(),
 });
 
 export const askLlmOutput = {

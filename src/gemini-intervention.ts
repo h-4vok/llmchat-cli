@@ -11,6 +11,7 @@ const candidates = ['captcha', 'blocked', 'login'] as const;
 export function createGeminiInterventionWaiter(
   page: GeminiUiPage,
   notifications: NativeNotificationPort,
+  headless = false,
 ) {
   let notified = false;
   async function notifyOnce(): Promise<void> {
@@ -23,9 +24,17 @@ export function createGeminiInterventionWaiter(
     const intervention = await observeIntervention(page);
     if (!intervention) return;
     if (intervention === 'cancelled') throw cancellationError();
+    requireVisibleIntervention(intervention, headless);
     await notifyOnce();
     await waitUntilResolved(page, intervention, emit, signal);
   };
+}
+
+function requireVisibleIntervention(intervention: Intervention, headless: boolean): void {
+  if (headless)
+    throw new Error(
+      `Gemini requires manual ${intervention} resolution in a hidden browser. Authenticate with "llmchat auth gemini" locally; to inspect the page, explicitly request headless: false. Do not automatically resend the prompt.`,
+    );
 }
 
 async function waitUntilResolved(

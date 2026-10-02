@@ -71,3 +71,14 @@ test('parseChat rejects conflicting or unknown options', () => {
   assert.throws(() => parseChat(['--gem', 'one', '--gpt', 'two']), /Conflicting options/);
   assert.throws(() => parseChat(['--unknown']), /Unknown option/);
 });
+
+test('the option separator preserves flag-like prompt text', () => {
+  for (const prompt of ['--help', '-h', '--output', '--provider gemini']) {
+    const parsed = parseChat(['--provider', 'demo', '--output', 'jsonl', '--', prompt]);
+    assert.equal(parsed.help, false);
+    assert.equal(parsed.prompt, prompt);
+    assert.equal(parsed.provider, 'demo');
+    assert.equal(parsed.output, 'jsonl');
+  }
+  assert.equal(parseChat(['hello', '--', 'world', '--help']).prompt, 'hello world --help');
+});

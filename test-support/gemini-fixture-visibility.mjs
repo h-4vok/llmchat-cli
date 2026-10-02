@@ -1,5 +1,5 @@
-export function choiceVisible(settings, text, isFallback, waits) {
+export function choiceVisible(settings, text, waits) {
   if (text === 'Extended thinking')
     return settings.reasoningVisible && settings.reasoningVisibleAfter <= waits();
-  return isFallback ? settings.fallbackVisible : settings.modelVisible;
+  return settings.modelVisible && settings.modelVisibleAfter <= waits();
 }

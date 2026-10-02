@@ -1,5 +1,6 @@
 export function createGeminiChoiceStub({ calls, text, visible, enabled, select }) {
   return {
+    innerText: async () => text,
     async visible() {
       return visible;
     },

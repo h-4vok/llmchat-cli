@@ -24,12 +24,13 @@ export function createPlaywrightGeminiBrowser(
   options: GeminiPlaywrightOptions = runtimeOptions(),
 ): GeminiBrowserPort {
   return {
-    async open(context) {
-      const page = await openPage(context, options);
-      return createGeminiUiConversation(page, geminiArtifactPort(options), notifications);
+    async open(context, launch = {}) {
+      const headless = launch.headless ?? false;
+      const page = await openPage(context, options, headless);
+      return createGeminiUiConversation(page, geminiArtifactPort(options), notifications, headless);
     },
-    async health(context) {
-      const page = await openPage(context, options);
+    async health(context, launch) {
+      const page = await openPage(context, options, launchHeadless(launch));
       try {
         await page.goto(geminiConfig.appUrl);
         const health = await inspectHealth(page);
@@ -43,6 +44,10 @@ export function createPlaywrightGeminiBrowser(
       }
     },
   };
+}
+
+function launchHeadless(launch: { headless?: boolean } = {}): boolean {
+  return launch.headless ?? false;
 }
 
 async function tryPersistHealthFailure(
@@ -80,13 +85,14 @@ function errorMessage(failure: unknown): string {
 async function openPage(
   context: AdapterContext,
   options: GeminiPlaywrightOptions,
+  headless: boolean,
 ): Promise<GeminiUiPage> {
   const executablePath = discoverBrowserExecutable(
     browserCandidates(options.platform, options.env, options.chromium.executablePath()),
   );
   const browser = await options.chromium.launchPersistentContext(context.profileDirectory, {
     executablePath,
-    headless: false,
+    headless,
     timeout: 15_000,
     ignoreDefaultArgs: ['--no-sandbox'],
     args: ['--disable-blink-features=AutomationControlled'],

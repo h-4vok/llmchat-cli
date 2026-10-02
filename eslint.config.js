@@ -9,7 +9,13 @@ export default tseslint.config(
   js.configs.recommended,
   ...tseslint.configs.recommended,
   {
-    files: ['src/**/*.ts', 'test/**/*.mjs', 'test-support/**/*.mjs'],
+    files: [
+      'src/**/*.ts',
+      'test/**/*.mjs',
+      'test-support/**/*.mjs',
+      'packages/**/*.mjs',
+      'scripts/**/*.mjs',
+    ],
     languageOptions: {
       globals: globals.node,
     },

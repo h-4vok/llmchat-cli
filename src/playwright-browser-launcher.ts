@@ -136,6 +136,7 @@ function fallbackObservation(page: Page): PersistentBrowserObservation {
 async function visible(page: Page, selector: string): Promise<boolean> {
   return page
     .locator(selector)
+    .filter({ visible: true })
     .first()
     .isVisible()
     .catch(() => false);

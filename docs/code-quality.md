@@ -23,6 +23,11 @@ Review criteria, not laws. Exceptions OK: contract, boundary, perf, framework, c
 
 `resolveProvider(p)` uses explicit/default provider, decides invalid-provider error. `isValidProvider(p)` answers validity only; no error policy, no throw. Split may vary by contract.
 
+Respect explicit model variants: selecting Flash must not match Flash Lite or
+silently fall back to it. Verify the selected identity before submitting a
+prompt. Keep model matching in a pure policy module and browser visibility in
+the caller's request; UI boundaries apply these decisions.
+
 ## Automation
 
 Run, interpret, report lint. Never ignore failures.
