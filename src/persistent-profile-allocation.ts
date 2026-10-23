@@ -1,4 +1,8 @@
-import { chmodSync, mkdirSync, rmdirSync } from 'node:fs';
+import {
+  acquireProfileLeaseLock,
+  defaultProfileLeaseFileSystem,
+  type ProfileLeaseFileSystem,
+} from './profile-lease-lock.js';
 
 export interface ProfileLease {
   profileDirectory: string;
@@ -9,27 +13,18 @@ export interface ProfileAllocator {
   acquire(stableDirectory: string): ProfileLease;
 }
 
-type ProfileFileSystem = {
-  mkdir: typeof mkdirSync;
-  chmod: typeof chmodSync;
-  rmdir: typeof rmdirSync;
-};
-
-const nodeProfileFileSystem: ProfileFileSystem = {
-  mkdir: mkdirSync,
-  chmod: chmodSync,
-  rmdir: rmdirSync,
-};
+type ProcessIsAlive = (pid: number) => boolean;
 
 export function createPersistentProfileAllocator(
-  fileSystem: ProfileFileSystem = nodeProfileFileSystem,
+  fileSystem: ProfileLeaseFileSystem = defaultProfileLeaseFileSystem,
+  processIsAlive: ProcessIsAlive = isProcessAlive,
 ): ProfileAllocator {
   return {
     acquire(stableDirectory) {
       let slot = 0;
       let acquired: ProfileLease | undefined;
       do {
-        acquired = tryAcquire(stableDirectory, slot, fileSystem);
+        acquired = tryAcquire(stableDirectory, slot, fileSystem, processIsAlive);
         slot += 1;
       } while (!acquired);
       return acquired;
@@ -40,44 +35,26 @@ export function createPersistentProfileAllocator(
 function tryAcquire(
   stableDirectory: string,
   slot: number,
-  fileSystem: ProfileFileSystem,
+  fileSystem: ProfileLeaseFileSystem,
+  processIsAlive: ProcessIsAlive,
 ): ProfileLease | undefined {
   const profileDirectory = derivedProfileDirectory(stableDirectory, slot);
   fileSystem.mkdir(profileDirectory, { recursive: true, mode: 0o700 });
   fileSystem.chmod(profileDirectory, 0o700);
   const lockDirectory = `${stableDirectory}.lease-${String(slot)}`;
-  try {
-    fileSystem.mkdir(lockDirectory, { mode: 0o700 });
-  } catch (failure) {
-    if (isOccupied(failure)) return undefined;
-    throw failure;
-  }
-  return lease(profileDirectory, lockDirectory, fileSystem);
+  const release = acquireProfileLeaseLock(lockDirectory, fileSystem, processIsAlive);
+  return release ? { profileDirectory, release } : undefined;
 }
 
-function lease(
-  profileDirectory: string,
-  lockDirectory: string,
-  fileSystem: ProfileFileSystem,
-): ProfileLease {
-  let active = true;
-  const release = () => {
-    if (!active) return;
-    fileSystem.rmdir(lockDirectory);
-    active = false;
-    process.off('exit', release);
-  };
-  process.once('exit', release);
-  return {
-    profileDirectory,
-    release,
-  };
+function isProcessAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (failure) {
+    return (failure as NodeJS.ErrnoException).code !== 'ESRCH';
+  }
 }
 
 function derivedProfileDirectory(stableDirectory: string, slot: number): string {
   return slot === 0 ? stableDirectory : `${stableDirectory}.concurrent-${String(slot)}`;
-}
-
-function isOccupied(failure: unknown): boolean {
-  return (failure as NodeJS.ErrnoException).code === 'EEXIST';
 }

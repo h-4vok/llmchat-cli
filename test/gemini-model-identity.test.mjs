@@ -15,30 +15,27 @@ async function choose(items, requested, selectedAfterClick) {
 
 test('Flash selects the unique Flash model even when Flash-Lite comes first', async () => {
   const menu = await choose(
-    [
-      { label: '3.5 Flash-Lite' },
-      { label: '3.6 Flash', description: 'More capable than Flash-Lite' },
-    ],
+    [{ label: '3.5 Flash-Lite' }, { label: '3.8 Flash', description: 'All-around help' }],
     'Flash',
   );
-  assert.deepEqual(menu.clicked, ['3.6 Flash']);
-  assert.equal(menu.selected(), '3.6 Flash');
+  assert.deepEqual(menu.clicked, ['3.8 Flash']);
+  assert.equal(menu.selected(), '3.8 Flash');
 });
 
 test('a full model name never matches a longer Lite name', async () => {
-  const menu = await choose([{ label: '3.6 Flash-Lite' }, { label: '3.6 Flash' }], '3.6 Flash');
-  assert.deepEqual(menu.clicked, ['3.6 Flash']);
+  const menu = await choose([{ label: '3.5 Flash-Lite' }, { label: '3.8 Flash' }], '3.8 Flash');
+  assert.deepEqual(menu.clicked, ['3.8 Flash']);
 });
 
 test('explicit Flash Lite accepts its hyphenated label without choosing Flash', async () => {
-  const menu = await choose([{ label: '3.6 Flash' }, { label: '3.5 Flash-Lite' }], 'Flash Lite');
+  const menu = await choose([{ label: '3.8 Flash' }, { label: '3.5 Flash-Lite' }], 'Flash Lite');
   assert.deepEqual(menu.clicked, ['3.5 Flash-Lite']);
 });
 
 for (const items of [
   [{ label: '3.5 Flash-Lite' }],
-  [{ label: '3.6 Flash', enabled: false }, { label: '3.5 Flash-Lite' }],
-  [{ label: '2.5 Flash' }, { label: '3.6 Flash' }],
+  [{ label: '3.8 Flash', enabled: false }, { label: '3.5 Flash-Lite' }],
+  [{ label: '2.5 Flash' }, { label: '3.8 Flash' }],
 ]) {
   test(`unavailable or ambiguous Flash is rejected: ${JSON.stringify(items)}`, async () => {
     await assert.rejects(choose(items, 'Flash'), /Flash.*unavailable|Flash.*ambiguous/);
@@ -65,6 +62,16 @@ test('padded Gemini menu labels keep Flash distinct from Flash Lite', async () =
 test('a full versioned model is confirmed from its selected menu option when the button abbreviates it', async () => {
   const menu = await choose([{ label: '3.8 Flash', buttonText: 'Flash' }], '3.8 Flash');
   assert.equal(menu.selected(), '3.8 Flash');
+});
+
+test('each currently visible Gemini model is selectable by its full label', async () => {
+  const labels = ['3.5 Flash-Lite', '3.8 Flash', '3.1 Pro', '4 Argon'];
+  const items = labels.map((label) => ({ label }));
+  for (const label of labels) {
+    const menu = await choose(items, label);
+    assert.deepEqual(menu.clicked, [label]);
+    assert.equal(menu.selected(), label);
+  }
 });
 
 test('an abbreviated button cannot confirm the wrong version of Flash', async () => {
@@ -102,7 +109,7 @@ for (const options of [
     const conversation = createGeminiUiConversation(session.page, session.artifactPort, {
       send: async () => {},
     });
-    await assert.rejects(conversation.submit({ prompt: 'hello', model: '3.6 Flash' }, () => {}));
+    await assert.rejects(conversation.submit({ prompt: 'hello', model: '3.8 Flash' }, () => {}));
     assert.equal(
       session.calls.some((call) => call[0] === 'fill' || call[1] === 'send'),
       false,

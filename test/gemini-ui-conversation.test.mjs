@@ -53,7 +53,7 @@ test('disposable chat enables Temporary chat before every other chat action', as
   assert.ok(actions.indexOf('temporary-chat') < actions.indexOf('fill'));
   assert.ok(actions.indexOf('temporary-chat') < actions.indexOf('send'));
   assert.ok(actions.indexOf('temporary-chat') < actions.lastIndexOf('innerText'));
-  assert.ok(actions.indexOf('temporary-chat') < actions.indexOf('choice:Extended thinking'));
+  assert.ok(actions.indexOf('temporary-chat') < actions.indexOf('choice:High'));
   assert.equal(
     session.calls.some((call) => call[0] === 'active' && call[1] === 'temporary-chat'),
     false,

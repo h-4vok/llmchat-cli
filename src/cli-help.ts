@@ -14,7 +14,7 @@ export function printRootHelp(output: Output): void {
 Supported providers: ${supportedProviders.join(', ')}
 
 System instructions: --gem, --gpt, and --system-instructions are equivalent aliases.
-Reasoning values for Gemini: "Standard", "Extended thinking". Default: "Standard".
+Reasoning values for Gemini: "Low", "Medium", "High". Legacy aliases: "Standard" → "Low" and "Extended thinking" → "High". Default: "Low".
 --headless hides the browser and checks existing authentication without interactive login.
 
 Examples:

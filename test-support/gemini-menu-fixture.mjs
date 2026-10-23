@@ -35,6 +35,7 @@ export function geminiMenuFixture(items, selectedAfterClick) {
     },
     isVisible: async () => true,
     isEnabled: async () => true,
+    getAttribute: async (name) => (name === 'aria-expanded' ? 'false' : null),
     click: async () => {},
     innerText: async () => items.find((item) => item.label === selected)?.buttonText ?? selected,
   };
@@ -42,7 +43,8 @@ export function geminiMenuFixture(items, selectedAfterClick) {
     clicked,
     selected: () => selected,
     page: {
-      locator: (selector) => (selector === 'gem-menu-item' ? collection(items) : opener),
+      locator: () => opener,
+      getByRole: (role) => (role === 'menuitem' ? collection(items) : opener),
       getByText: (text, options) => ({
         matches: (label) => (options?.exact ? label === text : matcher(text, label)),
       }),

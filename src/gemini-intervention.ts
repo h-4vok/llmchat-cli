@@ -17,7 +17,11 @@ export function createGeminiInterventionWaiter(
   async function notifyOnce(): Promise<void> {
     if (notified) return;
     notified = true;
-    await notifications.send(authenticationAttention('gemini'));
+    try {
+      await notifications.send(authenticationAttention('gemini'));
+    } catch {
+      // The visible browser remains the source of truth for manual intervention.
+    }
   }
   return async (emit: Emit, signal?: AbortSignal): Promise<void> => {
     signal?.throwIfAborted();

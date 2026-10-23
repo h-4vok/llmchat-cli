@@ -9,12 +9,12 @@ export function createGeminiPlaywrightPage(page: Page, context: BrowserContext):
     element: (name) => playwrightElement(page.locator(geminiSelectors[name]).first()),
     exactText: (text) =>
       playwrightElement(
-        page.locator('gem-menu-item').filter({ has: page.getByText(text, { exact: true }) }),
+        page.getByRole('menuitem').filter({ has: page.getByText(text, { exact: true }) }),
       ),
     modelOption: (text) =>
       playwrightElement(
         page
-          .locator('gem-menu-item')
+          .getByRole('menuitem')
           .filter({ has: page.getByText(geminiModelNamePattern(text)) })
           .filter({ visible: true }),
       ),
@@ -42,6 +42,13 @@ function playwrightElement(locator: Locator): GeminiUiElement {
   return {
     visible: () => locator.isVisible().catch(() => false),
     enabled: () => locator.isEnabled().catch(() => false),
+    expanded: async () => {
+      try {
+        return (await locator.getAttribute('aria-expanded')) === 'true';
+      } catch {
+        return false;
+      }
+    },
     click: () => locator.click(),
     fill: (value) => locator.fill(value),
     innerText: () => locator.innerText(),

@@ -21,6 +21,10 @@ function locator(calls, name, rejectVisibility = false) {
       calls.push(['enabled', name]);
       return true;
     },
+    async getAttribute(attribute) {
+      calls.push(['attribute', name, attribute]);
+      return attribute === 'aria-expanded' ? 'true' : null;
+    },
     async click() {
       calls.push(['click', name]);
     },
@@ -53,6 +57,10 @@ test('Playwright page boundary centralizes selectors and viewport operations', a
       return locator(calls, selector);
     },
     getByText: () => ({}),
+    getByRole(role) {
+      calls.push(['role', role]);
+      return locator(calls, role);
+    },
     async waitForTimeout(ms) {
       calls.push(['wait', ms]);
     },
@@ -83,19 +91,16 @@ test('Playwright page boundary centralizes selectors and viewport operations', a
   assert.equal(boundary.currentUrl(), 'https://gemini.google.com/app');
   assert.deepEqual(await boundary.screenshot(), new Uint8Array([7]));
   await boundary.close();
-  assert.ok(calls.some((call) => call[0] === 'locator' && call[1] === 'gem-menu-item'));
+  assert.ok(calls.some((call) => call[0] === 'role' && call[1] === 'menuitem'));
   assert.ok(calls.some((call) => call[0] === 'screenshot' && call[1].fullPage === false));
   const selectors = calls.filter(([kind]) => kind === 'locator').map(([, selector]) => selector);
-  assert.ok(
-    selectors.some((selector) =>
-      selector.includes('div[role="textbox"][aria-label="Enter a prompt for Gemini"]'),
-    ),
-  );
+  assert.ok(selectors.includes('div.ql-editor.textarea.new-input-ui[contenteditable="true"]'));
 
   boundary.element('model');
   const modelSelector = calls.filter(([kind]) => kind === 'locator').at(-1)[1];
-  assert.match(modelSelector, /Open mode picker/);
-  assert.match(modelSelector, /aria-label\*="model"/i);
+  assert.equal(modelSelector, 'button[data-test-id="bard-mode-menu-button"]');
+  assert.equal(await boundary.element('model').expanded(), true);
+  assert.ok(calls.some((call) => call[0] === 'attribute' && call[2] === 'aria-expanded'));
 });
 
 test('detached Playwright locators are treated as not visible', async () => {
@@ -119,24 +124,6 @@ test('Temporary chat targets the current component host', () => {
   boundary.element('temporaryChat');
 
   assert.deepEqual(selectors, ['temp-chat-button']);
-});
-
-test('selected Playwright menu items expose active state', async () => {
-  const page = { locator: () => locator([], 'selected'), getByText: () => ({}) };
-  const boundary = createGeminiPlaywrightPage(page, {});
-  assert.equal(await boundary.exactText('Extended thinking').active(), true);
-});
-
-test('nested selected Playwright menu icons expose active state', async () => {
-  const page = { locator: () => locator([], 'selected-query'), getByText: () => ({}) };
-  const boundary = createGeminiPlaywrightPage(page, {});
-  assert.equal(await boundary.exactText('Extended thinking').active(), true);
-});
-
-test('detached Playwright active state is treated as inactive', async () => {
-  const page = { locator: () => locator([], 'rejected'), getByText: () => ({}) };
-  const boundary = createGeminiPlaywrightPage(page, {});
-  assert.equal(await boundary.exactText('Extended thinking').active(), false);
 });
 
 test('page close waiting tolerates a close race', async () => {

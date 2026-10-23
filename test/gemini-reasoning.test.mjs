@@ -13,41 +13,42 @@ function fixture(options) {
   };
 }
 
-test('extended reasoning toggles after model selection and verifies the active button', async () => {
-  const session = fixture({ reasoning: 'Standard' });
+test('medium reasoning opens its submenu and verifies the selected level', async () => {
+  const session = fixture();
   await session.conversation.submit(
-    { prompt: 'hello', model: 'Flash', reasoning: 'Extended thinking' },
+    { prompt: 'hello', model: '3.8 Flash', reasoning: 'Medium' },
     () => {},
   );
   const actions = session.calls.map((call) => (call[0] === 'click' ? call[1] : call[0]));
-  assert.ok(actions.indexOf('choice:Flash') < actions.indexOf('choice:Extended thinking'));
+  assert.ok(actions.indexOf('choice:3.8 Flash') < actions.indexOf('choice:Thinking level'));
+  assert.ok(actions.indexOf('choice:Thinking level') < actions.indexOf('choice:Medium'));
   assert.ok(
-    session.calls.filter((call) => call[0] === 'innerText' && call[1] === 'model').length >= 2,
+    session.calls.filter((call) => call[0] === 'exact-model' && call[1] === 'Medium').length >= 2,
   );
 });
 
-test('waits for the reasoning option after opening the model menu', async () => {
+test('waits for the requested reasoning level after opening both menus', async () => {
   const session = fixture({ reasoningVisibleAfter: 2 });
   const signals = [];
-  await session.conversation.submit({ prompt: 'hello', reasoning: 'Extended thinking' }, (signal) =>
+  await session.conversation.submit({ prompt: 'hello', reasoning: 'High' }, (signal) =>
     signals.push(signal),
   );
   assert.equal(
     signals.some((signal) => signal.message?.includes('unavailable')),
     false,
   );
-  assert.ok(session.calls.filter((call) => call[0] === 'exact-model').length >= 3);
+  assert.ok(
+    session.calls.filter((call) => call[0] === 'exact-model' && call[1] === 'High').length >= 2,
+  );
 });
 
-test('standard reasoning opens the model menu and disables active extended mode', async () => {
-  const session = fixture({ reasoning: 'Extended thinking' });
+test('standard reasoning selects Low from an active High level', async () => {
+  const session = fixture({ reasoning: 'High' });
   const signals = [];
   await session.conversation.submit({ prompt: 'hello', reasoning: 'Standard' }, (signal) =>
     signals.push(signal),
   );
-  assert.ok(
-    session.calls.some((call) => call[0] === 'click' && call[1] === 'choice:Extended thinking'),
-  );
+  assert.ok(session.calls.some((call) => call[0] === 'click' && call[1] === 'choice:Low'));
   assert.ok(session.calls.some((call) => call[0] === 'click' && call[1] === 'model'));
   assert.equal(
     signals.some((signal) => signal.message?.includes('Warning')),
@@ -68,7 +69,7 @@ test('unknown reasoning warns and leaves the chat usable', async () => {
 test('missing reasoning option warns and continues to send', async () => {
   const session = fixture({ reasoningVisible: false });
   const signals = [];
-  await session.conversation.submit({ prompt: 'hello', reasoning: 'Extended thinking' }, (signal) =>
+  await session.conversation.submit({ prompt: 'hello', reasoning: 'High' }, (signal) =>
     signals.push(signal),
   );
   assert.match(signals[0].message, /reasoning option is unavailable/);
@@ -78,38 +79,58 @@ test('missing reasoning option warns and continues to send', async () => {
 test('disabled reasoning option warns and continues to send', async () => {
   const session = fixture({ reasoningEnabled: false });
   const signals = [];
-  await session.conversation.submit({ prompt: 'hello', reasoning: 'Extended thinking' }, (signal) =>
+  await session.conversation.submit({ prompt: 'hello', reasoning: 'High' }, (signal) =>
     signals.push(signal),
   );
   assert.match(signals[0].message, /reasoning option is unavailable/);
 });
 
-test('toggle click failure warns and continues to send', async () => {
-  const session = fixture({ choiceThrows: true });
+test('reasoning option disappearing before selection warns and continues to send', async () => {
+  const session = fixture();
+  const exactText = session.page.exactText;
+  let visibilityChecks = 0;
+  session.page.exactText = (text) => {
+    const choice = exactText(text);
+    if (text === 'High') {
+      const visible = choice.visible;
+      choice.visible = async () => ++visibilityChecks === 1 && visible();
+    }
+    return choice;
+  };
   const signals = [];
-  await session.conversation.submit({ prompt: 'hello', reasoning: 'Extended thinking' }, (signal) =>
+  await session.conversation.submit({ prompt: 'hello', reasoning: 'High' }, (signal) =>
     signals.push(signal),
   );
-  assert.match(signals[0].message, /toggle could not be changed/);
+  assert.match(signals[0].message, /reasoning option is unavailable/);
+  assert.equal(signals.at(-1).kind, 'response');
+});
+
+test('reasoning level click failure warns and continues to send', async () => {
+  const session = fixture({ choiceThrows: true });
+  const signals = [];
+  await session.conversation.submit({ prompt: 'hello', reasoning: 'High' }, (signal) =>
+    signals.push(signal),
+  );
+  assert.match(signals[0].message, /level could not be selected/);
   assert.equal(signals.at(-1).kind, 'response');
 });
 
 test('final verification failure warns and continues to send', async () => {
-  const session = fixture({ reasoningStuck: true });
+  const session = fixture({ reasoning: 'Medium', reasoningStuck: true });
   const signals = [];
-  await session.conversation.submit({ prompt: 'hello', reasoning: 'Extended thinking' }, (signal) =>
+  await session.conversation.submit({ prompt: 'hello', reasoning: 'High' }, (signal) =>
     signals.push(signal),
   );
-  assert.match(signals[0].message, /could not be verified/);
+  assert.match(signals[0].message, /verification found reasoning level "High" was not selected/);
   assert.equal(signals.at(-1).kind, 'response');
 });
 
-test('matching selected menu state avoids a toggle click', async () => {
-  const session = fixture({ reasoning: 'Extended thinking', buttonExtended: false });
+test('matching selected level avoids a second selection click', async () => {
+  const session = fixture({ reasoning: 'High' });
   await session.conversation.submit({ prompt: 'hello', reasoning: 'Extended thinking' }, () => {});
   assert.equal(
-    session.calls.some((call) => call[0] === 'click' && call[1].startsWith('choice:')),
-    false,
+    session.calls.filter((call) => call[0] === 'click' && call[1] === 'choice:High').length,
+    0,
   );
 });
 

@@ -5,3 +5,4 @@ coverage/
 reports/
 .stryker-tmp/
 .llmchat-data/
+.serena/

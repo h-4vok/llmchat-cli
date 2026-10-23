@@ -29,6 +29,24 @@ test('Windows and macOS notifications pass content as process arguments', async 
   }
 });
 
+test('Windows notification command loads WinRT toast types before using them', async () => {
+  const calls = [];
+  const port = createSystemNotificationPort('win32', {
+    run(command, args) {
+      calls.push([command, args]);
+      return { status: 0, stdout: '', stderr: '' };
+    },
+  });
+  await port.send(notification);
+  const script = calls[0][1].at(-1);
+  const toastType = script.indexOf('ToastNotification,Windows.UI.Notifications');
+  const managerType = script.indexOf('ToastNotificationManager,Windows.UI.Notifications');
+
+  assert.ok(toastType >= 0);
+  assert.ok(managerType > toastType);
+  assert.ok(script.indexOf('ToastNotification]::new') > managerType);
+});
+
 test('unsupported systems and failed notification processes fail clearly', async () => {
   assert.throws(() => createSystemNotificationPort('linux', { run() {} }), /Windows and macOS/);
   const port = createSystemNotificationPort('darwin', {

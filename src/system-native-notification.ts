@@ -33,6 +33,8 @@ function windowsCommand(notification: NativeNotification): [string, string[]] {
   const script = [
     `$title=${title};$message=${message}`,
     '[Windows.Data.Xml.Dom.XmlDocument,Windows.Data.Xml.Dom.XmlDocument,ContentType=WindowsRuntime]>$null',
+    '[Windows.UI.Notifications.ToastNotification,Windows.UI.Notifications,ContentType=WindowsRuntime]>$null',
+    '[Windows.UI.Notifications.ToastNotificationManager,Windows.UI.Notifications,ContentType=WindowsRuntime]>$null',
     '$xml=[Windows.Data.Xml.Dom.XmlDocument]::new()',
     '$xml.LoadXml(\'<toast><visual><binding template="ToastGeneric"><text></text><text></text></binding></visual></toast>\')',
     '$text=$xml.GetElementsByTagName("text")',

@@ -62,6 +62,19 @@ test('notification failure does not prevent visible authentication', async () =>
   });
 });
 
+test('notification failure does not interrupt authentication in the default session flow', async () => {
+  const ports = createPorts('missing', ['usable']);
+  ports.notifications.send = async () => {
+    throw new Error('notification unavailable');
+  };
+
+  assert.deepEqual(await ensureBrowserSession(request, ports), {
+    status: 'ready',
+    source: 'authenticated',
+  });
+  assert.equal(ports.closeCalls(), 1);
+});
+
 test('cancelled visible authentication verifies every terminal session state', async (t) => {
   for (const availability of ['usable', 'indeterminate', 'missing']) {
     await t.test(availability, async () => {

@@ -9,10 +9,8 @@ import { createGeminiInterventionWaiter } from './gemini-intervention.js';
 import type { NativeNotificationPort } from './native-notification.js';
 import { redactDiagnosticText } from './secret-redaction.js';
 import { geminiConfig } from './config/gemini.js';
-import {
-  selectModel as selectModelFromMenu,
-  selectReasoningMode,
-} from './gemini-model-selection.js';
+import { selectModel as selectModelFromMenu } from './gemini-model-selection.js';
+import { selectReasoningMode } from './gemini-reasoning-selection.js';
 
 export type GeminiElementName =
   | 'blocked'
@@ -29,6 +27,7 @@ export type GeminiElementName =
 export interface GeminiUiElement {
   visible(): Promise<boolean>;
   enabled(): Promise<boolean>;
+  expanded(): Promise<boolean>;
   click(): Promise<void>;
   fill(value: string): Promise<void>;
   innerText(): Promise<string>;
@@ -62,9 +61,12 @@ export function createGeminiUiConversation(
       throwIfAborted(signal);
       await waitForIntervention(emit, signal);
       if (request.disposableConversation) await enableTemporaryChat(page, signal);
+      await page.wait();
       await selectModel(page, request.model, emit, signal);
-      if (request.reasoning !== undefined)
+      if (request.reasoning !== undefined) {
+        await page.wait();
         await selectReasoningMode(page, request.reasoning, request.model, emit, signal);
+      }
       await (await required(page, 'composer', signal)).fill(request.prompt);
       throwIfAborted(signal);
       await (await required(page, 'send', signal)).click();

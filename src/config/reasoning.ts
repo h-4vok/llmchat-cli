@@ -1,21 +1,24 @@
-export type ReasoningMode = { name: string; uiValue: string; extended: boolean };
+export type ReasoningMode = { name: string; uiValue: string };
 export type ModelReasoning = { defaultMode: ReasoningMode; modes: readonly ReasoningMode[] };
 
-const standard = { name: 'Standard', uiValue: 'Standard', extended: false } as const;
-const extended = {
-  name: 'Extended thinking',
-  uiValue: 'Extended thinking',
-  extended: true,
-} as const;
-const geminiModes = Object.freeze([standard, extended]);
+const low = { name: 'Low', uiValue: 'Low' } as const;
+const medium = { name: 'Medium', uiValue: 'Medium' } as const;
+const high = { name: 'High', uiValue: 'High' } as const;
+const geminiModes = Object.freeze([low, medium, high]);
 
 const geminiModels: Record<string, ModelReasoning> = Object.freeze({
-  '3.5 Flash-Lite': { defaultMode: standard, modes: geminiModes },
-  '3.6 Flash': { defaultMode: standard, modes: geminiModes },
-  '3.1 Pro': { defaultMode: standard, modes: geminiModes },
+  '3.5 Flash-Lite': { defaultMode: low, modes: geminiModes },
+  '3.8 Flash': { defaultMode: low, modes: geminiModes },
+  '3.1 Pro': { defaultMode: low, modes: geminiModes },
+  '4 Argon': { defaultMode: low, modes: geminiModes },
 });
 
-const geminiFallback: ModelReasoning = Object.freeze({ defaultMode: standard, modes: geminiModes });
+const geminiFallback: ModelReasoning = Object.freeze({ defaultMode: low, modes: geminiModes });
+
+const legacyReasoning: Record<string, string> = {
+  Standard: 'Low',
+  'Extended thinking': 'High',
+};
 
 export function resolveGeminiReasoning(model: string | undefined): ModelReasoning {
   return (model && geminiModels[model]) || geminiFallback;
@@ -26,5 +29,6 @@ export function requestedReasoning(
   value: string | undefined,
 ): ReasoningMode | undefined {
   if (value === undefined) return definition.defaultMode;
-  return definition.modes.find((mode) => mode.name === value);
+  const requested = legacyReasoning[value] ?? value;
+  return definition.modes.find((mode) => mode.name === requested);
 }

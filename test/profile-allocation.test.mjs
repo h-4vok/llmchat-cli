@@ -64,10 +64,13 @@ test('a failed lease release remains retryable', () => {
   const allocator = createPersistentProfileAllocator({
     mkdir() {},
     chmod() {},
+    readFile() {},
     rmdir() {
       removals += 1;
       if (removals === 1) throw failure;
     },
+    unlink() {},
+    writeFile() {},
   });
   const lease = allocator.acquire('/profiles/gemini');
 

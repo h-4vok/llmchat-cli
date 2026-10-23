@@ -44,6 +44,18 @@ test('manual intervention cancellation preserves the browser and does not retry'
   assert.deepEqual(fake.calls, [['goto']]);
 });
 
+test('notification failure does not stop a manual Gemini intervention', async () => {
+  const fake = fixture('login');
+  fake.setNotificationFailure(new Error('notification unavailable'));
+  const execution = fake.conversation.submit({ prompt: 'hello' }, () => {});
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(fake.calls.filter(([kind]) => kind === 'fill').length, 0);
+  fake.resolve();
+  await execution;
+  assert.equal(fake.calls.filter(([kind]) => kind === 'fill').length, 1);
+});
+
 test('a page closed without intervention evidence cancels without notification', async () => {
   const fake = fixture();
   fake.cancel();

@@ -1,0 +1,49 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "LLMChat: debug Gemini reasoning",
+      "type": "node",
+      "request": "launch",
+      "program": "${workspaceFolder}/dist/cli.js",
+      "cwd": "${workspaceFolder}",
+      "args": [
+        "chat",
+        "${input:geminiPrompt}",
+        "--provider",
+        "gemini",
+        "--model",
+        "${input:geminiModel}",
+        "--reasoning",
+        "${input:geminiReasoning}",
+        "--disposable-conversation",
+        "--keep-browser-open"
+      ],
+      "preLaunchTask": "npm: build",
+      "console": "integratedTerminal",
+      "sourceMaps": true,
+      "outFiles": ["${workspaceFolder}/dist/**/*.js"],
+      "skipFiles": ["<node_internals>/**"]
+    }
+  ],
+  "inputs": [
+    {
+      "id": "geminiPrompt",
+      "type": "promptString",
+      "description": "Prompt to send to Gemini",
+      "default": "Responde solamente: debugger-ok"
+    },
+    {
+      "id": "geminiModel",
+      "type": "promptString",
+      "description": "Gemini model name or alias",
+      "default": "3.5 Flash-Lite"
+    },
+    {
+      "id": "geminiReasoning",
+      "type": "promptString",
+      "description": "Gemini reasoning level",
+      "default": "Low"
+    }
+  ]
+}

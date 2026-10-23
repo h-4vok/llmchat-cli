@@ -21,7 +21,7 @@
   },
   "scripts": {
     "build": "tsc",
-    "test:unit": "node --test \"test/*.test.mjs\"",
+    "test:unit": "node --test --test-concurrency=2 \"test/*.test.mjs\"",
     "test:compiled": "node --test",
     "test": "npm run build && npm run test:unit",
     "test:mcp": "npm run build && node --test \"test/mcp-*.test.mjs\"",

@@ -11,6 +11,7 @@ export function geminiInterventionFixture(
   let releaseWait = () => {};
   let closed = false;
   let sent = false;
+  let notificationFailure;
   const visibleNames = () => {
     const names = new Set(['composer', 'send']);
     if (intervention) names.add(intervention);
@@ -48,7 +49,12 @@ export function geminiInterventionFixture(
     conversation: createGeminiUiConversation(
       page,
       { saveDiagnostic, saveScreenshot },
-      { send: async (notification) => notifications.push(notification) },
+      {
+        async send(notification) {
+          if (notificationFailure) throw notificationFailure;
+          notifications.push(notification);
+        },
+      },
       headless,
     ),
     resolve() {
@@ -56,6 +62,9 @@ export function geminiInterventionFixture(
       releaseWait();
     },
     advance: () => releaseWait(),
+    setNotificationFailure(error) {
+      notificationFailure = error;
+    },
     cancel() {
       closed = true;
       releaseWait();

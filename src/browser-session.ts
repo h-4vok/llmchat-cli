@@ -82,12 +82,24 @@ export async function ensureBrowserSession(
   report(observer, required);
   const login = await ports.browser.openLoginBrowser({ ...request, visible: true });
   try {
-    await ports.notifications.send(authenticationAttention(request.provider));
+    await sendAuthenticationNotification(ports, request.provider);
     return await waitForLogin(login, required, observer);
   } finally {
     await login.close();
   }
 }
+
+async function sendAuthenticationNotification(
+  ports: BrowserSessionPorts,
+  provider: string,
+): Promise<void> {
+  try {
+    await ports.notifications.send(authenticationAttention(provider));
+  } catch {
+    // Authentication state comes from the browser, not native notifications.
+  }
+}
+
 async function ensureVisibleBrowserSession(
   request: BrowserSessionRequest,
   ports: BrowserSessionPorts,

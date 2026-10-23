@@ -11,6 +11,9 @@ export function createGeminiChoiceStub({ calls, text, visible, enabled, select }
     async enabled() {
       return enabled;
     },
+    async expanded() {
+      return false;
+    },
     async active() {
       return false;
     },

@@ -1,14 +1,17 @@
+import { createArtifactPort } from './gemini-ui-helpers.mjs';
+import { temporaryChatElement } from './gemini-fixture-temporary-chat.mjs';
+import { createGeminiPageStub } from './gemini-ui-page-fixture.mjs';
+
 export function geminiUiFixture(options = {}) {
   const settings = {
     modelVisible: true,
     modelVisibleAfter: 0,
-    activeModel: 'Flash',
-    reasoning: 'Standard',
+    activeModel: '3.8 Flash',
+    reasoning: 'Low',
     reasoningVisible: true,
     reasoningVisibleAfter: 0,
     reasoningEnabled: true,
     reasoningStuck: false,
-    buttonExtended: undefined,
     modelEnabled: true,
     modelOpenerVisible: true,
     choiceThrows: false,
@@ -25,7 +28,7 @@ export function geminiUiFixture(options = {}) {
     () => sent,
     (value) => (sent = value),
   );
-  const elements = createElements(settings, element, () => waits);
+  const elements = createElements(settings, element, () => waits, calls);
   const artifacts = [];
   const result = {
     calls,
@@ -54,6 +57,9 @@ function createElement(calls, sent, setSent) {
     async enabled() {
       return true;
     },
+    async expanded() {
+      return false;
+    },
     async fill(value) {
       calls.push(['fill', name, value]);
     },
@@ -69,10 +75,19 @@ function createElement(calls, sent, setSent) {
   });
 }
 
-function createElements(settings, element, waits) {
+function createElements(settings, element, waits, calls) {
   let activeModel = settings.activeModel;
   let reasoning = settings.reasoning;
+  let modelMenuOpen = false;
+  let reasoningMenuOpen = false;
   const delayed = settings.composeFirst || settings.silentFirst;
+  const model = element('model', settings.modelOpenerVisible, () => activeModel);
+  model.click = async () => {
+    calls.push(['click', 'model']);
+    modelMenuOpen = !modelMenuOpen;
+    reasoningMenuOpen = false;
+  };
+  model.expanded = async () => modelMenuOpen;
   return {
     temporaryChat: temporaryChatElement(settings, element),
     blocked: element('blocked', false),
@@ -83,12 +98,7 @@ function createElements(settings, element, waits) {
       () => elementSent(element) && Boolean(settings.errorText),
       settings.errorText,
     ),
-    model: element(
-      'model',
-      settings.modelOpenerVisible,
-      () =>
-        `${activeModel}${(settings.buttonExtended ?? (!settings.reasoningStuck && reasoning === 'Extended thinking')) ? ' Extended' : ''}`,
-    ),
+    model,
     login: element('login', false),
     response: element(
       'response',
@@ -98,52 +108,20 @@ function createElements(settings, element, waits) {
     send: element('send', settings.missing !== 'send'),
     stop: element('stop', () => elementSent(element) && settings.composeFirst && waits() === 0),
     setActiveModel: (model) => (activeModel = model),
-    setReasoning: () => {
-      if (!settings.reasoningStuck)
-        reasoning = reasoning === 'Extended thinking' ? 'Standard' : 'Extended thinking';
+    openReasoningMenu: () => (reasoningMenuOpen = true),
+    closeMenus: () => {
+      modelMenuOpen = false;
+      reasoningMenuOpen = false;
     },
-    reasoningActive: () => reasoning === 'Extended thinking',
+    selectReasoning: (level) => {
+      if (!settings.reasoningStuck) reasoning = level;
+      modelMenuOpen = false;
+      reasoningMenuOpen = false;
+    },
+    reasoningActive: (level) => reasoning === level,
+    menuOpen: () => modelMenuOpen,
+    reasoningMenuOpen: () => reasoningMenuOpen,
   };
 }
 
 const elementSent = (element) => element('probe', false).sent();
-
-function createGeminiPageStub({ settings, calls, elements, incrementWait, currentWaits }) {
-  return {
-    async goto(received) {
-      calls.push(['goto', received]);
-    },
-    element(name) {
-      return elements[name];
-    },
-    exactText(text) {
-      calls.push(['exact-model', text]);
-      const choice = createGeminiChoiceStub({
-        calls,
-        text,
-        visible: choiceVisible(settings, text, currentWaits),
-        enabled: text === 'Extended thinking' ? settings.reasoningEnabled : settings.modelEnabled,
-        select: () =>
-          text === 'Extended thinking' ? elements.setReasoning() : elements.setActiveModel(text),
-      });
-      choice.active = async () => text === 'Extended thinking' && elements.reasoningActive();
-      if (settings.choiceThrows) choice.click = () => Promise.reject(new Error('menu changed'));
-      return choice;
-    },
-    async wait() {
-      incrementWait();
-    },
-    currentUrl: () => settings.url,
-    closed: () => false,
-    async screenshot() {
-      calls.push(['screenshot']);
-      return new Uint8Array([1, 2]);
-    },
-    async close() {
-      calls.push(['close-page']);
-    },
-  };
-}
-import { createArtifactPort, createGeminiChoiceStub } from './gemini-ui-helpers.mjs';
-import { choiceVisible } from './gemini-fixture-visibility.mjs';
-import { temporaryChatElement } from './gemini-fixture-temporary-chat.mjs';
